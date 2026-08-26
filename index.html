@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>极速台球 3D · 极光碰撞</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+  <div id="app">
+      <canvas id="scene"></canvas>
+
+      <!-- HUD -->
+      <div id="hud">
+          <div id="top-left" class="panel">
+              <div class="stat"><span class="label">得分</span><span id="score">0</span></div>
+              <div class="stat"><span class="label">杆数</span><span id="shots">0</span></div>
+              <div class="stat"><span class="label">剩余</span><span id="remain">15</span></div>
+            </div>
+
+          <div id="net-badge" class="hidden"></div>
+
+          <div id="potted-tray" class="panel" title="已落袋"></div>
+
+          <!-- 双人对战计分板 -->
+          <div id="versus-bar" class="panel">
+              <div class="vp" id="vp1">
+                  <div class="vp-head"><span class="vp-tag">P1</span><span class="vp-name" id="vn1">—</span><span
+              class="vp-group" id="vg1">待定</span></div>
+                  <div class="vp-tray" id="vt1"></div>
+                </div>
+              <div class="vs-sep">VS</div>
+              <div class="vp" id="vp2">
+                  <div class="vp-head"><span class="vp-tag">P2</span><span class="vp-name" id="vn2">—</span><span
+              class="vp-group" id="vg2">待定</span></div>
+                  <div class="vp-tray" id="vt2"></div>
+                </div>
+            </div>
+
+          <div id="buttons">
+              <button id="btn-top" title="切换俯视视角 (V)">俯视</button>
+              <button id="btn-sound" title="声音开关 (M)">🔊</button>
+              <button id="btn-restart" title="重新开始 (R)">重开</button>
+            </div>
+
+          <div id="help" class="panel">
+              鼠标移动瞄准 · 按住<b>左键向后拖拽</b>蓄力，松开出杆<br>
+              右键拖拽旋转视角 · 滚轮缩放 · 空格蓄力<br>
+              <b>V</b> 俯视 · <b>M</b> 音效 · <b>R</b> 重开
+            </div>
+
+          <div id="power-wrap" class="panel">
+              <span class="label">力度</span>
+              <div id="power-bar">
+          <div id="power-fill"></div>
+        </div>
+              <span id="power-pct">0%</span>
+            </div>
+
+          <div id="toast"></div>
+          <div id="dbg" class="hidden"></div>
+        </div>
+
+      <!-- 开始界面 -->
+      <div id="overlay">
+          <div id="overlay-card">
+              <h1>🎱 极速台球 3D</h1>
+              <p class="sub">真实物理碰撞 · 粒子火花 · 冲击波 · 动态光影</p>
+              <div class="keys">
+                  左键拖拽蓄力出杆 &nbsp;·&nbsp; 右键旋转视角 &nbsp;·&nbsp; 滚轮缩放<br>
+                  空格蓄力 &nbsp;·&nbsp; V 俯视 &nbsp;·&nbsp; M 音效 &nbsp;·&nbsp; R 重开
+                </div>
+<div class="mode-row">
+    <button id="btn-arcade" class="mode-btn mode-arcade">单人街机<small>计分清台挑战</small></button>
+    <button id="btn-online" class="mode-btn mode-online">联机对战<small>两台电脑 · 自动匹配</small></button>
+  </div>
+            </div>
+        </div>
+
+      <!-- 联机大厅 -->
+      <div id="lobby" class="hidden">
+          <div id="lobby-card">
+              <h2>🌐 联机大厅</h2>
+              <div id="lobby-status">连接服务器中…</div>
+              <div id="lobby-info"></div>
+              <div class="lobby-hint">把上方地址发给朋友，各自在浏览器打开即可自动匹配<br>第 3 人起自动进入观战视角（仅观看）</div>
+              <button id="btn-leave">离开房间</button>
+            </div>
+        </div>
+
+      <!-- 胜利界面 -->
+      <div id="victory" class="hidden">
+          <div id="overlay-card">
+              <h1 id="v-title">🏆 清台成功！</h1>
+              <p class="sub" id="v-stats"></p>
+              <button id="btn-again">再 来 一 局</button>
+            </div>
+        </div>
+  </div>
+
+  <script>
+    /* 诊断辅助：捕获运行时错误，供自动化测试读取 */
+    window.__errs = [];
+    addEventListener('error', function (e) {
+      window.__errs.push((e.message || 'error') + ' @ ' + (e.filename || '').split('/').pop() + ':' + (e.lineno || 0));
+    });
+    addEventListener('unhandledrejection', function (e) {
+      window.__errs.push('rejection: ' + (e.reason && e.reason.message || e.reason));
+    });
+    window.__DEBUG = /[?&]debug\b/.test(location.search);
+  </script>
+  <script src="lib/three.min.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/effects.js"></script>
+  <script src="js/physics.js"></script>
+  <script src="js/rules.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/game.js"></script>
+</body>
+
+</html>
