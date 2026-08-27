@@ -15,6 +15,14 @@
   const FRICTION_A = 0.55;           // 滚动摩擦减速度 m/s²
   const DAMPING = 0.30;              // 附加指数阻尼系数
   const STOP_SPEED = 0.015;          // 低于该速度视为停止
+  /* ---- 杆法（母球击球点）参数：均可调手感 ---- */
+  const SPIN_GAIN = 0.55;            // 击球点偏移 → 旋转量增益
+  const SLIDE_FR = 0.8;              // 滑动摩擦减速度 m/s²（自旋与线速度互相转换）
+  const STOP_SLIDE = 0.02;           // 接触点滑移速度低于该值视为纯滚动
+  const BALL_TANGENT_MU = 0.10;      // 球-球接触切向摩擦系数（传递侧旋/throw）
+  const CUSHION_SPIN_KEEP = 0.35;    // 碰库时侧塞转化为切向滚动的比例
+  const CUSHION_SPIN_DAMP = 0.45;    // 碰库后剩余侧塞的衰减比例
+  const WY_DAMP = 0.8;               // 垂直自旋（侧塞）随滚动自然衰减速率 1/s
 
   const LIMIT_X = TABLE_W / 2 - BALL_R;  // 球心可到达的边界
   const LIMIT_Z = TABLE_H / 2 - BALL_R;
@@ -49,10 +57,13 @@
       this.pos = { x: 0, y: BALL_R, z: 0 };
       this.vel = { x: 0, y: 0, z: 0 };
       this.lastPos = { x: 0, y: BALL_R, z: 0 };
+      // 旋转状态：ang=水平轴角速度（高/低杆），wy=垂直轴角速度（左/右塞）rad/s
+      this.ang = { x: 0, z: 0 };
+      this.wy = 0;
       this.mesh = null;             // 由渲染层挂载
     }
     get speed() { return Math.hypot(this.vel.x, this.vel.z); }
-    stop() { this.vel.x = 0; this.vel.z = 0; }
+    stop() { this.vel.x = 0; this.vel.z = 0; this.ang.x = 0; this.ang.z = 0; this.wy = 0; }
   }
 
   class World {
@@ -83,18 +94,32 @@
         b.lastPos.x = b.pos.x;
         b.lastPos.z = b.pos.z;
         const sp = b.speed;
-        if (sp > 0) {
-          b.pos.x += b.vel.x * dt;
-          b.pos.z += b.vel.z * dt;
-          let ns = sp - FRICTION_A * dt;            // 滚动摩擦
-          ns *= Math.max(0, 1 - DAMPING * dt);      // 指数阻尼
-          if (ns <= STOP_SPEED) ns = 0;
-          const k = sp > 0 ? ns / sp : 0;
-          b.vel.x *= k;
-          b.vel.z *= k;
+                // 接触点滑移速度（含水平自旋）：滑动阶段由滑动摩擦驱动自旋与线速度互相转换
+        const sbx = b.vel.x + b.ang.z * BALL_R;
+        const sbz = b.vel.z - b.ang.x * BALL_R;
+        const s = Math.hypot(sbx, sbz);
+        if (s > 1e-9) {
+          const k = Math.min(1, SLIDE_FR * dt / s);
+          b.vel.x -= sbx * k;
+          b.vel.z -= sbz * k;
+          b.ang.x += (2.5 / BALL_R) * sbz * k;
+          b.ang.z -= (2.5 / BALL_R) * sbx * k;
+        }
+        b.wy *= Math.max(0, 1 - WY_DAMP * dt);
+        const sp2 = b.speed;
+        if (sp2 > 0) {
+          b.pos.x += b.vel.x * dt;
+          b.pos.z += b.vel.z * dt;
+          if (s <= STOP_SLIDE) {
+            let ns = sp2 - FRICTION_A * dt;
+            ns *= Math.max(0, 1 - DAMPING * dt);
+            if (ns <= STOP_SPEED) { b.stop(); } else { const k2 = ns / sp2; b.vel.x *= k2; b.vel.z *= k2; }
+          }
+        } else if (s <= STOP_SLIDE) {
+          b.stop();
         }
       }
-      // 2. 碰撞与约束
+// 2. 碰撞与约束
       this.collideBalls();
       this.collideCushions();
       this.checkPockets();
@@ -128,6 +153,16 @@
           const imp = (1 + RESTITUTION_BALL) * vn / 2;
           a.vel.x -= nx * imp; a.vel.z -= nz * imp;
           c.vel.x += nx * imp; c.vel.z += nz * imp;
+          // 切向摩擦冲量：传递侧旋并带轻微 throw（幅度按库仑摩擦上限截断）
+          const tx = -nz, tz = nx;
+          const rvt = (a.vel.x - c.vel.x) * tx + (a.vel.z - c.vel.z) * tz;
+          const cap = BALL_TANGENT_MU * ((1 + RESTITUTION_BALL) * vn / 2);
+          const jt = Math.max(-cap, Math.min(cap, rvt / 2));
+          a.vel.x -= tx * jt; a.vel.z -= tz * jt;
+          c.vel.x += tx * jt; c.vel.z += tz * jt;
+          const dw = (5 * jt) / (2 * BALL_R);
+          a.wy += dw;
+          c.wy -= dw;
           if (vn > 0.06) {           // 过滤静止接触的微弱抖动，避免特效/音效刷屏
             this.onEvent({
               type: 'ball',
@@ -169,6 +204,10 @@
       const v = axis === 'x' ? Math.abs(b.vel.x) : Math.abs(b.vel.z);
       if (axis === 'x') b.vel.x = -b.vel.x * RESTITUTION_CUSHION;
       else b.vel.z = -b.vel.z * RESTITUTION_CUSHION;
+      // 侧塞：库边接触点滑移速度 → 切向滚动（改变反弹角）；剩余侧塞衰减
+      const tang = axis === 'x' ? 'z' : 'x';
+      b.vel[tang] += b.wy * BALL_R * CUSHION_SPIN_KEEP;
+      b.wy *= (1 - CUSHION_SPIN_DAMP);
       if (v > 0.08) {
         this.onEvent({ type: 'cushion', intensity: v, x: b.pos.x, z: b.pos.z });
       }
@@ -241,9 +280,22 @@
     }
   }
 
-  window.PoolPhys = {
+    /** 出杆：击球点偏移 u（上=高杆 +1 / 下=低杆 -1）、h（左塞 -1 / 右塞 +1）→ 线冲量 + 旋转冲量 */
+  function applyStrike(b, dir, speed, contact) {
+    const u = Math.max(-1, Math.min(1, contact && contact.u || 0));
+    const h = Math.max(-1, Math.min(1, contact && contact.h || 0));
+    const dx = dir.x, dz = dir.z;
+    b.vel.x = dx * speed;
+    b.vel.z = dz * speed;
+    const base = SPIN_GAIN * 5 * speed / (2 * BALL_R);
+    b.ang.x =  base * u * dz;
+    b.ang.z = -base * u * dx;
+    b.wy    =  base * h;
+  }
+
+window.PoolPhys = {
     BALL_R, TABLE_W, TABLE_H, POCKETS, LIMIT_X, LIMIT_Z,
-    Ball, World, inPocketZone,
+    Ball, World, inPocketZone, applyStrike,
   };
 })();
 

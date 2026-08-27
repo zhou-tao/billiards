@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node test-server.js"
+    "test": "node test-server.js",
+    "test:phys": "node js/physics.test.js"
   },
   "keywords": [],
   "author": "",

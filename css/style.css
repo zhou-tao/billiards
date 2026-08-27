@@ -730,3 +730,79 @@ body.mode-versus #potted-tray {
     line-height: 1.8;
   }
 }
+
+/* ---------- 母球击球点选择器 ---------- */
+#contact-wrap {
+  position: absolute;
+  right: 18px;
+  bottom: 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  z-index: 10;
+}
+
+#contact-ball {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  position: relative;
+  cursor: pointer;
+  touch-action: none;
+  background: radial-gradient(circle at 35% 30%, #f4f6fa, #8b97ab 68%, #4a556b 100%);
+  border: 1px solid rgba(255, 255, 255, .28);
+  box-shadow: inset -6px -8px 16px rgba(0, 0, 0, .38), 0 4px 14px rgba(0, 0, 0, .45);
+}
+
+#contact-ball::after {
+  /* 中心参考环 */
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border: 1px dashed rgba(30, 40, 60, .45);
+  border-radius: 50%;
+}
+
+#contact-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background: radial-gradient(circle at 35% 30%, #ffe08a, #ff9838 82%);
+  box-shadow: 0 0 10px rgba(255, 170, 60, .85), 0 2px 4px rgba(0, 0, 0, .55);
+}
+
+#contact-tag {
+  font-size: 11px;
+  color: #cfe0ff;
+  min-height: 14px;
+  letter-spacing: 1px;
+}
+
+@media (max-width: 760px) {
+  #contact-wrap {
+    right: 10px;
+    bottom: 82px;   /* 避开底部居中力度条 */
+    padding: 8px 9px;
+    gap: 4px;
+  }
+
+  #contact-ball {
+    width: 68px;
+    height: 68px;
+  }
+
+  #contact-tag {
+    font-size: 10px;
+  }
+}

@@ -46,19 +46,27 @@
               <button id="btn-restart" title="重新开始 (R)">重开</button>
             </div>
 
-          <div id="help" class="panel">
-              鼠标移动瞄准 · 按住<b>左键向后拖拽</b>蓄力，松开出杆<br>
-              右键拖拽旋转视角 · 滚轮缩放 · 空格蓄力<br>
-              <b>V</b> 俯视 · <b>M</b> 音效 · <b>R</b> 重开
-            </div>
+<div id="help" class="panel">
+      鼠标移动瞄准 · 按住<b>左键向后拖拽</b>蓄力，松开出杆<br>
+      右键拖拽旋转视角 · 滚轮缩放 · 空格蓄力<br>
+      <b>W/S/A/D</b> 高/低杆 · 左右塞（或拖拽右下「击球点」圆盘）<br>
+      <b>V</b> 俯视 · <b>M</b> 音效 · <b>R</b> 重开
+    </div>
 
-          <div id="power-wrap" class="panel">
-              <span class="label">力度</span>
-              <div id="power-bar">
-          <div id="power-fill"></div>
-        </div>
-              <span id="power-pct">0%</span>
-            </div>
+<div id="power-wrap" class="panel">
+       <span class="label">力度</span>
+       <div id="power-bar">
+        <div id="power-fill"></div>
+      </div>
+       <span id="power-pct">0%</span>
+    </div>
+
+    <!-- 母球击球点（高/低杆 · 左/右塞） -->
+    <div id="contact-wrap" class="panel" title="母球击球点：拖拽选点；W/S 高/低杆，A/D 左/右塞；松手在圆心附近回中">
+      <span class="label">击球点</span>
+      <div id="contact-ball"><div id="contact-dot"></div></div>
+      <span id="contact-tag">中心</span>
+    </div>
 
           <div id="toast"></div>
           <div id="dbg" class="hidden"></div>
@@ -71,8 +79,9 @@
               <p class="sub">真实物理碰撞 · 粒子火花 · 冲击波 · 动态光影</p>
               <div class="keys">
                   左键拖拽蓄力出杆 &nbsp;·&nbsp; 右键旋转视角 &nbsp;·&nbsp; 滚轮缩放<br>
-                  空格蓄力 &nbsp;·&nbsp; V 俯视 &nbsp;·&nbsp; M 音效 &nbsp;·&nbsp; R 重开
-                </div>
+空格蓄力 &nbsp;·&nbsp; V 俯视 &nbsp;·&nbsp; M 音效 &nbsp;·&nbsp; R 重开<br>
+        W/A/S/D 高/低杆 · 左右塞
+      </div>
 <div class="mode-row">
     <button id="btn-arcade" class="mode-btn mode-arcade">单人街机<small>计分清台挑战</small></button>
     <button id="btn-online" class="mode-btn mode-online">联机对战<small>两台电脑 · 自动匹配</small></button>

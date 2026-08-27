@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  const { BALL_R, TABLE_W, TABLE_H, POCKETS, Ball, World } = PoolPhys;
+  const { BALL_R, TABLE_W, TABLE_H, POCKETS, Ball, World, applyStrike } = PoolPhys;
   const HALF_W = TABLE_W / 2;
   const HALF_H = TABLE_H / 2;
   const MAX_SHOT_SPEED = 6.4;
@@ -261,7 +261,7 @@
   let netWaiting = false;           // 联机模式但尚未匹配成功（单机模式必须为 false，否则无法出杆）
   let lastAimSend = -99;            // 瞄准广播节流（帧计数）
   let lastSentAngle = NaN, lastSentPower = -1;
-  const remoteAim = { angle: 0, power: 0, t: -999 };
+  const remoteAim = { angle: 0, power: 0, t: -999, contact: { u: 0, h: 0 } };
 
   /* ---- 搞笑昵称 ---- */
   const NAME_POOL = [
@@ -302,10 +302,10 @@
   /** 当前应显示的瞄准来源（本机输入 或 联机对手/观战的远端瞄准） */
   function displayAim() {
     if (!netInGame() || canActNow()) {
-      return { angle: input.aimAngle, power: input.power, mine: true };
+      return { angle: input.aimAngle, power: input.power, contact: input.contact, mine: true };
     }
     if (window.__fc - remoteAim.t < 150) {       // 约 2.5 秒内收到过远端瞄准
-      return { angle: remoteAim.angle, power: remoteAim.power, mine: false };
+      return { angle: remoteAim.angle, power: remoteAim.power, contact: remoteAim.contact, mine: false };
     }
     return null;
   }
@@ -430,7 +430,7 @@
     return 0.05 + input.power * 0.34;
   }
 
-  function shoot(power, angleOverride) {
+  function shoot(power, angleOverride, contact) {
     if (angleOverride !== undefined) input.aimAngle = angleOverride;   // 远端出杆时对齐方向
     const dir = { x: Math.cos(input.aimAngle), z: Math.sin(input.aimAngle) };
     pendingShot = {
@@ -438,6 +438,7 @@
       speed: MAX_SHOT_SPEED * (0.14 + 0.86 * power),
       power,
       startPull: currentPull(),
+      contact: contact || input.contact,   // 击球点：远端出杆用消息携带
       applied: false,
     };
     strikeT = 0;
@@ -461,8 +462,7 @@
     if (t >= 1 && !pendingShot.applied) {
       const preBalls = isAuthority() ? serializeBalls() : null;   // 冲量施加前的球面快照
       pendingShot.applied = true;
-      cueBall.vel.x = pendingShot.dir.x * pendingShot.speed;
-      cueBall.vel.z = pendingShot.dir.z * pendingShot.speed;
+      applyStrike(cueBall, pendingShot.dir, pendingShot.speed, pendingShot.contact);
       state = 'ROLL';
       pottedThisShot = [];
       cueFouled = false;
@@ -474,6 +474,7 @@
           balls: preBalls,
           angle: input.aimAngle,
           power: pendingShot.power,
+          contact: pendingShot.contact,
         });
       }
       pendingShot = null;
@@ -611,6 +612,7 @@
     lastX: 0, lastY: 0,
     spaceCharging: false,
     spaceDir: 1,
+    contact: { u: 0, h: 0 },   // 母球击球点：u 高/低杆(+上/-下)，h 左/右塞(-左/+右), -1..1
   };
 
   const raycaster = new THREE.Raycaster();
@@ -676,8 +678,8 @@
     if (p > 0.02 && canActNow()) {
       if (netInGame() && netRole === 'p2') {
         // 玩家2：把出杆指令发给房主，由房主权威模拟后回播
-        NET.send({ t: 'aim', angle: input.aimAngle, power: p });
-        NET.send({ t: 'shot', angle: input.aimAngle, power: p });
+        NET.send({ t: 'aim', angle: input.aimAngle, power: p, contact: input.contact });
+        NET.send({ t: 'shot', angle: input.aimAngle, power: p, contact: input.contact });
       } else {
         shoot(p);
       }
@@ -723,6 +725,57 @@
   window.addEventListener('pointerup', endPointer);
   window.addEventListener('pointercancel', endPointer);
 
+  /* ---- 母球击球点选择器 ---- */
+  const contactBall = $('contact-ball'), contactDot = $('contact-dot'), contactTag = $('contact-tag');
+  let contactDrag = false;
+
+  function updateContactUI() {
+    const da = displayAim();
+    const c = (da && !da.mine && da.contact) ? da.contact : input.contact;
+    const R = (contactBall.clientWidth || 88) / 2;
+    const r = Math.max(1, R - 8);
+    contactDot.style.left = (R + c.h * r - 9) + 'px';
+    contactDot.style.top = (R - c.u * r - 9) + 'px';
+    const tag = [];
+    if (c.u > 0.15) tag.push('高杆'); else if (c.u < -0.15) tag.push('低杆');
+    if (c.h > 0.15) tag.push('右塞'); else if (c.h < -0.15) tag.push('左塞');
+    contactTag.textContent = tag.length ? tag.join(' · ') : '中心';
+  }
+
+  function setContactFromPointer(e) {
+    const rect = contactBall.getBoundingClientRect();
+    const R = rect.width / 2;
+    let h = (e.clientX - rect.left - R) / R;
+    let u = (R - (e.clientY - rect.top)) / R;
+    const len = Math.hypot(h, u);
+    if (len > 1) { h /= len; u /= len; }
+    input.contact = { u: clamp(u, -1, 1), h: clamp(h, -1, 1) };
+    updateContactUI();
+  }
+
+  function resetContact() {
+    input.contact = { u: 0, h: 0 };
+    updateContactUI();
+  }
+
+  contactBall.addEventListener('pointerdown', e => {
+    if (!canActNow()) return;
+    e.preventDefault();
+    contactDrag = true;
+    try { contactBall.setPointerCapture(e.pointerId); } catch (err) {}
+    setContactFromPointer(e);
+  });
+  contactBall.addEventListener('pointermove', e => { if (contactDrag) setContactFromPointer(e); });
+  const endContactDrag = () => {
+    if (!contactDrag) return;
+    contactDrag = false;
+    // 松手位置靠近圆心 = 一键回中
+    if (Math.hypot(input.contact.u, input.contact.h) < 0.16) resetContact();
+  };
+  contactBall.addEventListener('pointerup', endContactDrag);
+  contactBall.addEventListener('pointercancel', endContactDrag);
+  updateContactUI();
+
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
     camGoal.radius = clamp(camGoal.radius * (e.deltaY > 0 ? 1.08 : 0.93), 1.0, 5.5);
@@ -743,7 +796,19 @@
       case 'KeyR':
         if (state !== 'READY') requestRestart();
         break;
-      case 'ArrowLeft':
+            case 'KeyW':
+        if (canActNow()) { input.contact.u = clamp(input.contact.u + 0.08, -1, 1); updateContactUI(); }
+      break;
+      case 'KeyS':
+        if (canActNow()) { input.contact.u = clamp(input.contact.u - 0.08, -1, 1); updateContactUI(); }
+      break;
+      case 'KeyA':
+        if (canActNow()) { input.contact.h = clamp(input.contact.h - 0.08, -1, 1); updateContactUI(); }
+      break;
+      case 'KeyD':
+        if (canActNow()) { input.contact.h = clamp(input.contact.h + 0.08, -1, 1); updateContactUI(); }
+      break;
+case 'ArrowLeft':
         if (canActNow()) input.aimAngle -= 0.012;
         break;
       case 'ArrowRight':
@@ -756,8 +821,8 @@
       input.spaceCharging = false;
       if (input.power > 0.02 && canActNow()) {
         if (netInGame() && netRole === 'p2') {
-          NET.send({ t: 'aim', angle: input.aimAngle, power: input.power });
-          NET.send({ t: 'shot', angle: input.aimAngle, power: input.power });
+          NET.send({ t: 'aim', angle: input.aimAngle, power: input.power, contact: input.contact });
+          NET.send({ t: 'shot', angle: input.aimAngle, power: input.power, contact: input.contact });
         } else {
           shoot(input.power);
         }
@@ -911,7 +976,8 @@
     } else if (n === 0) {
       showToast('再试一杆！', '');
     }
-    state = 'AIM';
+        resetContact();
+state = 'AIM';
     updateHUD();
   }
 
@@ -1026,7 +1092,8 @@
       msgs.push('未进球 · 轮到' + pname(act.player));
     }
     showToast(msgs.join(' · '), act.foul ? 'bad' : (act.keepTurn ? 'good' : ''));
-    state = 'AIM';
+        resetContact();
+state = 'AIM';
     updateVersusHUD();
     updateHUD();   // 落袋动画结束后刷新剩余数
     window.__settleN = (window.__settleN || 0) + 1;   // 结算探针
@@ -1138,6 +1205,7 @@
     spawnCueBall();
     updateHUD();
     updateVersusHUD();
+    resetContact();
   }
 
   /* ================= 同步网格（滚动旋转 / 落袋动画） ================= */
@@ -1193,7 +1261,42 @@
     window.__gs = state;                    // 当前游戏状态（诊断/测试探针）
     window.__vs = (gameMode === 'versus' || gameMode === 'versus-net') ? rules.player : 0;  // 当前击球方（测试探针）
     window.__role = netRole || '-';         // 联机角色（测试探针）
-    if (window.__DEBUG && (window.__fc & 15) === 0) {
+    if (window.__DEBUG) window.__cue = { x: cueBall.pos.x, z: cueBall.pos.z };   // 杆法验证探针
+    if (window.__DEBUG) { window.__autoSeen = input.autoShot; }
+    if (window.__DEBUG && input.autoShot !== undefined && canActNow() &&
+        $('overlay').classList.contains('hidden') && $('lobby').classList.contains('hidden')) {
+      if (window.__autoU !== undefined) input.contact.u = window.__autoU;
+      if (window.__autoH !== undefined) input.contact.h = window.__autoH;
+      updateContactUI();
+      window.__autoFired = (window.__autoFired || 0) + 1;
+      const _p = input.autoShot; input.autoShot = undefined;
+      shoot(Math.max(0, Math.min(1, _p)));
+    }
+    if (window.__DEBUG) window.__auto = { shot: input.autoShot, can: canActNow(), u: input.contact.u, state: state };
+
+                // __DEBUG 自动化：出杆钩子 + URL 参数自动出杆（仅调试模式）
+        if (window.__DEBUG) {
+          window.__fireShot = power => {
+            if (!canActNow()) return false;
+            shoot(Math.max(0, Math.min(1, power)));
+            return true;
+          };
+          // URL 自动出杆只解析一次：?shot=<0..1>（力度）&u=<击球点纵向 负=低杆 正=高杆>&h=<横向 负=左塞 正=右塞>
+                    window.__autoParsed = (window.__autoParsed || 0) + 1;   // 计数探针
+if (!window.__autoDone) {
+            window.__autoDone = true;
+            const _q = new URLSearchParams(location.search);
+            const _ap = parseFloat(_q.get('shot'));
+            if (!isNaN(_ap)) {
+              const au = _q.get('u'), ah = _q.get('h');
+              if (au !== null && au !== '') window.__autoU = clamp(parseFloat(au), -1, 1);
+              if (ah !== null && ah !== '') window.__autoH = clamp(parseFloat(ah), -1, 1);
+              input.autoShot = _ap;
+              updateContactUI();
+            }
+          }
+        }
+if (window.__DEBUG && (window.__fc & 15) === 0) {
       const dbg = document.getElementById('dbg');
       dbg.classList.remove('hidden');
       let sinkN = 0;
@@ -1311,6 +1414,7 @@
     });    NET.on('aim', d => {
       remoteAim.angle = d.angle || 0;
       remoteAim.power = d.power || 0;
+      remoteAim.contact = d.contact || remoteAim.contact;
       remoteAim.t = window.__fc;
     });
     NET.on('shot', d => {
@@ -1325,7 +1429,7 @@
         }
       }
       restoreBalls(d.balls || []);
-      shoot(d.power, d.angle);
+      shoot(d.power, d.angle, d.contact);
     });
     NET.on('settled', d => {
       restoreBalls(d.balls || []);
@@ -1338,6 +1442,7 @@
       if (msgs.length) showToast(msgs.join(' · '), '');   // 与房主端提示保持一致
       if (d.over) netShowWin(d.winner, d.reason);
       else state = 'AIM';
+      resetContact();
     });
     NET.on('restart', () => {
       restart();
