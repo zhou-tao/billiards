@@ -181,7 +181,29 @@
     collideCushions() {
       for (const b of this.balls) {
         if (!b.active) continue;
-        if (inPocketZone(b.pos.x, b.pos.z)) continue;
+                // 袋口区域：不参与库边碰撞，改为与“袋口圆口”碰撞（擦过袋口时弹回台面，防止穿进桌框）
+        let inPocket = false;
+        for (const p of POCKETS) {
+          const pdx = b.pos.x - p.x, pdz = b.pos.z - p.z;
+          const pd2 = pdx * pdx + pdz * pdz;
+          if (pd2 >= p.mouth * p.mouth) continue;
+          inPocket = true;
+          const pd = Math.sqrt(pd2);
+          const rim = p.mouth - 1e-6;
+          if (pd >= rim && pd > 1e-9) {
+            const nx = pdx / pd, nz = pdz / pd;   // 袋心 → 球心（向外）
+            b.pos.x -= nx * (pd - rim);
+            b.pos.z -= nz * (pd - rim);
+            const vn = b.vel.x * nx + b.vel.z * nz;
+            if (vn > 0) {
+              b.vel.x -= nx * (1 + RESTITUTION_CUSHION) * vn;
+              b.vel.z -= nz * (1 + RESTITUTION_CUSHION) * vn;
+              if (vn > 0.08) this.onEvent({ type: 'cushion', intensity: vn, x: b.pos.x, z: b.pos.z });
+            }
+          }
+        }
+        if (inPocket) continue;
+
 
         if (b.pos.x < -LIMIT_X) {
           b.pos.x = -LIMIT_X;
@@ -227,6 +249,14 @@
           }
         }
         if (sunk) continue;
+        // 袋口区兜底：擦过袋口而越出台呢的活动球，压回台面（袋口牙），不落袋也不卡进桌框
+        if (b.pos.x > LIMIT_X || b.pos.x < -LIMIT_X || b.pos.z > LIMIT_Z || b.pos.z < -LIMIT_Z) {
+          if (b.pos.x > LIMIT_X) { if (b.vel.x > 0) b.vel.x = -b.vel.x * RESTITUTION_CUSHION; b.pos.x = LIMIT_X; }
+          if (b.pos.x < -LIMIT_X) { if (b.vel.x < 0) b.vel.x = -b.vel.x * RESTITUTION_CUSHION; b.pos.x = -LIMIT_X; }
+          if (b.pos.z > LIMIT_Z) { if (b.vel.z > 0) b.vel.z = -b.vel.z * RESTITUTION_CUSHION; b.pos.z = LIMIT_Z; }
+          if (b.pos.z < -LIMIT_Z) { if (b.vel.z < 0) b.vel.z = -b.vel.z * RESTITUTION_CUSHION; b.pos.z = -LIMIT_Z; }
+        }
+
         // 兜底：万一穿出边界过远，就近落袋，避免球飞丢
         if (Math.abs(b.pos.x) > TABLE_W / 2 + 0.09 || Math.abs(b.pos.z) > TABLE_H / 2 + 0.09) {
           let best = POCKETS[0], bd = Infinity;

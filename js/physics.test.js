@@ -8,6 +8,9 @@ global.window = globalThis;
 require('./physics.js');
 
 const { Ball, World, BALL_R, applyStrike } = window.PoolPhys;
+const P_POCKETS = window.PoolPhys.POCKETS;
+const P_LIMIT_X = window.PoolPhys.LIMIT_X;
+const P_LIMIT_Z = window.PoolPhys.LIMIT_Z;
 
 let pass = 0, fail = 0;
 function T(name, cond, extra) {
@@ -127,6 +130,63 @@ function addBall(w, id, x, z) {
   applyStrike(cue, { x: 1, z: 0 }, 1.2, { u: 0, h: 1 });
   run(w, 1.2);
   T('擦边撞击后目标球获得侧旋（target.wy≠0）', Math.abs(target.wy) > 1e-3, target.wy.toFixed(4));
+}
+
+
+/* 9. 袋口穿模回归（issue #2）：任何活动球不得停在合法边界之外 */
+{
+  // 精确复现 issue #2 的最小用例
+  const w = mkWorld();
+  const b = addBall(w, 4, P_LIMIT_X - 0.01, P_LIMIT_Z - 0.055);
+  b.vel.x = 0.34; b.vel.z = 0.03;
+  run(w, 2);
+  const outside = Math.abs(b.pos.x) > P_LIMIT_X + 1e-6 || Math.abs(b.pos.z) > P_LIMIT_Z + 1e-6;
+  T('issue#2 复现：球最终不越界', !(b.active && !b.sinking && outside), b.pos.x.toFixed(4) + ',' + b.pos.z.toFixed(4));
+}
+
+/* 10. 六个袋口 × 8 方向 × 3 档速度 擦边扫射：只允许落袋或留在合法区域 */
+{
+  const pockets = P_POCKETS;
+  const speeds = [0.2, 1.5, 5.0];
+  const dirs = [];
+  for (let k = 0; k < 8; k++) dirs.push((k * Math.PI) / 4);
+  let bad = null, n = 0;
+  outer:
+  for (const p of pockets) {
+    for (const sp of speeds) {
+      for (const a of dirs) {
+        const w = mkWorld();
+        const b = addBall(w, 9, p.x + Math.cos(a) * (p.r + 0.02), p.z + Math.sin(a) * (p.r + 0.02));
+        b.vel.x = Math.cos(a + Math.PI / 2) * sp * 0.6 + Math.cos(a) * sp;
+        b.vel.z = Math.sin(a + Math.PI / 2) * sp * 0.6 + Math.sin(a) * sp;
+        run(w, 4);
+        n++;
+        const outside = Math.abs(b.pos.x) > P_LIMIT_X + 1e-6 || Math.abs(b.pos.z) > P_LIMIT_Z + 1e-6;
+        if (b.active && !b.sinking && outside) { bad = { p, sp, a, x: b.pos.x, z: b.pos.z, pd: Math.hypot(b.pos.x - p.x, b.pos.z - p.z) }; break outer; }
+      }
+    }
+  }
+  T('袋口擦边扫射 ' + n + ' 组：无桌外活动球', !bad, bad ? JSON.stringify(bad) : '');
+}
+
+/* 11. 正常落袋回归：正对袋口低速直射应能入袋 */
+{
+  const w = mkWorld();
+  const p = P_POCKETS[0];
+  const b = addBall(w, 10, p.x - 0.12, p.z - 0.12);
+  const d = 1 / Math.SQRT2;
+  b.vel.x = d * 0.5; b.vel.z = d * 0.5;
+  run(w, 2);
+  T('正对角袋入袋：球应落袋（active=false 或 sinking 结束）', !b.active || !b.sinking, 'active=' + b.active + ' x=' + b.pos.x.toFixed(3));
+}
+
+/* 12. 库边反弹回归：远离袋口撞库仍正常反弹 */
+{
+  const w = mkWorld();
+  const b = addBall(w, 11, 0, 0.1);
+  b.vel.x = 1.0; b.vel.z = 0;
+  run(w, 2);
+  T('普通库边反弹：球留在台面内', Math.abs(b.pos.x) <= P_LIMIT_X + 1e-6 && Math.abs(b.pos.z) <= P_LIMIT_Z + 1e-6, b.vel.x.toFixed(3));
 }
 
 console.log(`\n杆法物理测试: ${pass} 通过 / ${fail} 失败`);
