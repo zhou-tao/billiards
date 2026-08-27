@@ -2,7 +2,7 @@
   "name": "billiards-3d",
   "version": "1.0.0",
   "description": "一个纯前端、零构建的 3D 台球小游戏，基于 **Three.js** 渲染 + 自研轻量物理引擎， 带完整的**三维碰撞特效**：粒子火花、桌面冲击波、撞击闪光、镜头震动与实时合成音效。 支持**单人街机**与**本地同屏双人对战**（标准八球规则）两种模式。",
-  "main": "index.js",
+  "main": "server.js",
   "directories": {
     "lib": "lib"
   },
