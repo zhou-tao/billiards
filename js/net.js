@@ -125,6 +125,9 @@
       clearTimeout(this._timer);
       if (this.ws) { try { this.ws.close(); } catch (e) {} }
       this.ws = null;
+      // 先发 close 事件供上层复位 UI（大厅/对局退出），再清连接状态：
+      // 不能在 ws.close() 前清 connected，否则 onclose 里 was=false 永远不派发事件
+      this.emit('close', { wasConnected: this.connected });
       this.connected = false;
     }
   }
