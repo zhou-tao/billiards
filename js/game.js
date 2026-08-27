@@ -1396,9 +1396,8 @@
       ? '双人对战 · 「' + localNames[1] + '」先开球！'
       : '开球！把彩球打进袋里 🎯', 'good');
   }
-  $('btn-arcade').addEventListener('click', () => startGame('arcade'));
-  $('btn-versus').addEventListener('click', () => startGame('versus'));
-  $('btn-online').addEventListener('click', () => {
+$('btn-arcade').addEventListener('click', () => startGame('arcade'));
+$('btn-online').addEventListener('click', () => {
     SFX.init();
     gameMode = 'versus-net';
     netWaiting = true;
