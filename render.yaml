@@ -1,0 +1,13 @@
+# Render 部署配置：联机对战匹配服务器（常驻 Node + WebSocket）
+# 用法：在 Render 控制台 New → Web Service → 连接 GitHub 仓库 zhou-tao/billiards，
+# 会自动识别本文件；选 Free 档即可。
+# 部署成功后把得到的 https://xxx.onrender.com 改成 wss://xxx.onrender.com 填进 js/config.js
+services:
+  - type: web
+    name: billiards-ws
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
+    autoDeploy: true

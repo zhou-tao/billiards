@@ -1356,10 +1356,14 @@
         netBadge();
       }
     });
-    NET.on('error', msg => {
-      lobbyStatus('⚠ ' + msg);
-    });
-  }
+NET.on('error', msg => {
+      lobbyStatus('⚠ ' + msg);
+    });
+    NET.on('reconnect', d => {
+      // 免费实例冷启动：首次连接失败后自动重试，大厅提示唤醒进度
+      lobbyStatus('🟡 服务器唤醒中…（第 ' + d.attempt + ' 次重连，免费实例首次约需 1 分钟）');
+    });
+  }
 
   function requestRestart() {
     if (netInGame()) {
@@ -1392,10 +1396,11 @@
     hideOverlays();
     startTime = Date.now();
     document.body.classList.toggle('mode-versus', mode === 'versus');
-    showToast(mode === 'versus'
-      ? '双人对战 · 「' + localNames[1] + '」先开球！'
-      : '开球！把彩球打进袋里 🎯', 'good');
-  }
+const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    showToast(mode === 'versus'
+      ? '双人对战 · 「' + localNames[1] + '」先开球！'
+      : coarse ? '开球！点按瞄准 · 向后拖拽蓄力，松开出杆 🎯' : '开球！把彩球打进袋里 🎯', 'good');
+  }
 $('btn-arcade').addEventListener('click', () => startGame('arcade'));
 $('btn-online').addEventListener('click', () => {
     SFX.init();

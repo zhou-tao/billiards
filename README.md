@@ -84,11 +84,27 @@ billiards-3d/
 ```
 
 - 物理：固定步长 1/360s 子步积分，等质量弹性碰撞（恢复系数 0.93），库边反弹 0.76，
-  滚动摩擦 + 指数阻尼，袋口区域取消库边反弹实现"滑入落袋"
+  滚动摩擦 + 指数阻尼，袋口区域取消库边反弹实现"滑入落袋"
 - 规则：`rules.js` 与渲染完全解耦，`resolve()` 输入一杆结果、输出胜负/犯规/轮换裁决，
-  已通过 19 项决策表单元测试 + 无头全链路集成测试
+  已通过 19 项决策表单元测试 + 无头全链路集成测试
 - 球体数字贴图由 Canvas 2D 实时绘制（全色球 / 条纹球 / 带红点的白球），球体按位移做真实滚动旋转
 - 想调手感？改 `js/physics.js` 顶部的常量：`FRICTION_A`、`RESTITUTION_BALL`、
-  `RESTITUTION_CUSHION`、`POCKETS` 的 `r`（袋口松紧）；出杆力度上限 `MAX_SHOT_SPEED` 在 game.js
+  `RESTITUTION_CUSHION`、`POCKETS` 的 `r`（袋口松紧）；出杆力度上限 `MAX_SHOT_SPEED` 在 game.js
+
+## ☁️ 线上部署（Netlify 静态站 + Render 联机服务器）
+
+静态站点（Netlify）跑不了常驻 WebSocket，联机对战需要一台常驻 Node 主机：
+
+1. **静态站**：仓库根目录的 `netlify.toml` 已配置（纯静态发布），在 Netlify 控制台
+   Import 本仓库即可，每次 push 自动部署。
+2. **联机服务器（免费）**：在 [render.com](https://render.com) 点击
+   **New → Web Service → 连接本仓库**（自动识别 `render.yaml`，选 Free 档），
+   免费实例空闲 15 分钟会休眠，首次连接需等约 1 分钟冷启动——客户端会自动重试并提示"唤醒中"。
+3. **填地址**：把 Render 服务地址（`https://xxx.onrender.com` → `wss://xxx.onrender.com`）
+   填进 `js/config.js` 的 `window.BILLIARDS_WS_URL`，push 后即生效。
+   也可用 URL 参数临时覆盖：`https://你的站点/?ws=wss://xxx.onrender.com`。
+
+> 未配置 `BILLIARDS_WS_URL` 时，线上点「联机对战」会提示需要配置服务器（不会无限重试）；
+> 本机 localhost 打开时自动连本地 `node server.js`，不受影响。
 
 
