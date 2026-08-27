@@ -56,6 +56,101 @@
   scene.add(lampA);
   const lampB = new THREE.PointLight(0xffe2b0, 0.5, 7, 2);
   lampB.position.set(0.7, 1.5, 0);
+
+  /* ================= 氛围：聚光灯柱 + 看台观众 ================= */
+  const ARENA = { lights: [], bases: [], beams: [], crowdPairs: [] };
+
+  function makeCrowdTexture(seed) {
+    const cv = document.createElement("canvas");
+    cv.width = 256; cv.height = 128;
+    const g = cv.getContext("2d");
+    g.fillStyle = "#10172a"; g.fillRect(0, 0, 256, 128);
+    const colors = ["#3d5a80", "#e0a458", "#e07a5f", "#81b29a", "#f2cc8f", "#8d99ae", "#cdb4db", "#a8dadc"];
+    let s = seed || 1;
+    const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    for (let row = 0; row < 6; row++) {
+      for (let col = 0; col < 24; col++) {
+        const x = 8 + col * 10 + rnd() * 4;
+        const y = 10 + row * 18 + rnd() * 5;
+        g.globalAlpha = 0.5 + rnd() * 0.5;
+        g.beginPath(); g.arc(x, y, 3.2 + rnd() * 2.2, 0, Math.PI * 2);
+        g.fillStyle = colors[(rnd() * colors.length) | 0];
+        g.fill();
+        g.globalAlpha = 1;
+        g.beginPath(); g.arc(x + rnd() * 2, y - 3.4, 2.1, 0, Math.PI * 2);
+        g.fillStyle = "#e8c39e"; g.fill();
+      }
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  function buildArena() {
+    // 1) 聚光灯（纯氛围，不开阴影，带光锥网格）
+    const spots = [
+      { x: -1.85, y: 2.75, z: 0.75, tx: 0.1, tz: -0.1, col: 0xfff2dd, pen: 0.50, ang: 0.55 },
+      { x: 1.85, y: 2.75, z: 0.75, tx: -0.1, tz: -0.1, col: 0xfff2dd, pen: 0.50, ang: 0.55 },
+      { x: 0, y: 2.95, z: -1.38, tx: 0, tz: 0.3, col: 0xcfe0ff, pen: 0.42, ang: 0.50 },
+    ];
+    for (const d of spots) {
+      const s = new THREE.SpotLight(d.col, d.pen, 9, d.ang, 0.55, 1.1);
+      s.position.set(d.x, d.y, d.z);
+      s.target.position.set(d.tx, 0, d.tz);
+      scene.add(s);
+      scene.add(s.target);
+      ARENA.lights.push(s);
+      ARENA.bases.push(d.pen);
+      if (!LOWGFX) {
+        const cone = new THREE.Mesh(
+          new THREE.ConeGeometry(0.62, 2.45, 20, 1, true),
+          new THREE.MeshBasicMaterial({ color: d.col, transparent: true, opacity: 0.045, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+        );
+        cone.position.set(d.x, d.y - 1.22, d.z);
+        cone.lookAt(d.tx, 0, d.tz);
+        cone.rotateX(Math.PI);
+        scene.add(cone);
+        ARENA.beams.push(cone);
+      }
+    }
+
+    // 2) 看台台阶（两侧长边 + 远端）
+    const standMat = new THREE.MeshStandardMaterial({ color: 0x141a2b, roughness: 0.92, metalness: 0 });
+    const mkStand = (x, z, rotY) => {
+      const g = new THREE.Group();
+      for (let r = 0; r < 3; r++) {
+        const step = new THREE.Mesh(new THREE.BoxGeometry(2.55, 0.36, 0.66), standMat);
+        step.position.set(0, -0.04 + r * 0.3, -0.42 + r * 0.34);
+        g.add(step);
+      }
+      g.position.set(x, 0, z);
+      g.rotation.y = rotY;
+      scene.add(g);
+    };
+    mkStand(0, 1.48, 0);
+    mkStand(0, -1.48, Math.PI);
+    mkStand(-1.95, 0, Math.PI / 2);   // 远端看台横跨短边
+
+    // 3) 观众（双贴图交叉淡入淡出 = 人群晃动错觉）
+    const mkCrowd = (x, z, w, h, rotY) => {
+      const tA = makeCrowdTexture(7), tB = makeCrowdTexture(23);
+      const mA = new THREE.MeshBasicMaterial({ map: tA, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide });
+      const mB = new THREE.MeshBasicMaterial({ map: tB, transparent: true, opacity: 0.0, depthWrite: false, side: THREE.DoubleSide });
+      const pA = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mA);
+      const pB = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mB);
+      pA.position.set(x, 0.86, z);
+      pB.position.copy(pA.position);
+      pA.rotation.y = rotY;
+      pB.rotation.y = rotY;
+      scene.add(pA);
+      scene.add(pB);
+      ARENA.crowdPairs.push([mA, mB]);
+    };
+    mkCrowd(0, 1.30, 3.05, 0.6, 0);
+    mkCrowd(0, -1.30, 3.05, 0.6, 0);
+    mkCrowd(-1.60, 0, 2.35, 0.6, Math.PI / 2);
+  }
+  buildArena();
   scene.add(lampB);
 
   /* ================= 特效系统接入 ================= */
@@ -334,7 +429,8 @@
         cueFouled = true;
         if (isAuthority()) showToast('💥 白球落袋！', 'bad');
       } else {
-        pottedThisShot.push(e.ballId);
+                SFX.crowd();   // 观众为进球轻声欢呼
+pottedThisShot.push(e.ballId);
         rules.notePot(e.ballId);
         if (gameMode === 'arcade') {
           addScore(100);
@@ -1113,7 +1209,8 @@ state = 'AIM';
 
   function versusWin(winner, reason) {
     state = 'OVER';
-    SFX.win();
+        SFX.crowd();
+SFX.win();
     FX.spawnRing(0, 0, 6);
     FX.spawnSparks(0, 0.06, 0, 6);
     FX.addShake(0.018);
@@ -1139,7 +1236,8 @@ state = 'AIM';
   /** 观战/对手端展示对局结果 */
   function netShowWin(winner, reason) {
     state = 'OVER';
-    SFX.win();
+        SFX.crowd();
+SFX.win();
     FX.spawnRing(0, 0, 6);
     FX.spawnSparks(0, 0.06, 0, 6);
     FX.addShake(0.018);
@@ -1172,7 +1270,8 @@ state = 'AIM';
 
   function victory() {
     state = 'OVER';
-    SFX.win();
+        SFX.crowd();
+SFX.win();
     FX.spawnRing(0, 0, 6);
     FX.spawnSparks(0, 0.06, 0, 6);
     FX.addShake(0.018);
@@ -1345,7 +1444,15 @@ if (window.__DEBUG && (window.__fc & 15) === 0) {
     updateCuePose();
     updateCamera(dt);
     updatePowerUI();
-    renderer.render(scene, camera);
+        // 氛围动效：聚光灯呼吸 + 人群晃动 + 光柱微摆
+    const _t = clock.getElapsedTime();
+    for (let _i = 0; _i < ARENA.lights.length; _i++) ARENA.lights[_i].intensity = ARENA.bases[_i] * (0.86 + 0.14 * Math.sin(_t * 1.9 + _i * 2.2));
+    if (ARENA.crowdPairs.length) {
+      const _p = 0.5 + 0.5 * Math.sin(_t * 2.1);
+      for (const [_mA, _mB] of ARENA.crowdPairs) { _mA.opacity = 0.35 + 0.55 * _p; _mB.opacity = 0.35 + 0.55 * (1 - _p); }
+    }
+    for (const _b of ARENA.beams) _b.rotation.z = Math.sin(_t * 0.6) * 0.02;
+renderer.render(scene, camera);
 
     if (state === 'ROLL') checkSettle();
   }

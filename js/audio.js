@@ -101,7 +101,35 @@
     tone(t + 0.10, 0.12, 'sine', 90, 60, 0.16);
   }
 
-  /** 出杆击打白球 */
+    /** 进球的轻声呐喊：三层带通噪声叠成人声感的“阿——”慢起慢落，刻意压低音量 */
+  let lastCrowdT = -1;
+  function cheerLayer(t0, off, dur, freq, q, peak) {
+    if (!ctx) return;
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+    const g = ctx.createGain();
+    const gv = g.gain;
+    gv.setValueAtTime(0.0001, t0 + off);
+    gv.linearRampToValueAtTime(peak, t0 + off + 0.12);
+    gv.exponentialRampToValueAtTime(0.0001, t0 + off + dur);
+    src.connect(f).connect(g).connect(master);
+    src.start(t0); src.stop(t0 + dur + 0.2);
+  }
+
+  function crowd() {
+    if (!ctx || muted) return;
+    const t = ctx.currentTime;
+    if (t - lastCrowdT < 1.4) return;   // 一杆内连续落袋只欢呼一次
+    lastCrowdT = t;
+    cheerLayer(t, 0.00, 1.05, 620, 0.8, 0.042);
+    cheerLayer(t, 0.18, 0.85, 1350, 1.6, 0.026);
+    cheerLayer(t, 0.30, 0.65, 2500, 2.4, 0.015);
+    tone(t + 0.12, 0.5, 'sine', 300, 430, 0.016);
+  }
+
+/** 出杆击打白球 */
   function cueStrike(p) {
     if (!ctx || muted) return;
     const t = ctx.currentTime;
@@ -128,7 +156,7 @@
   }
 
   window.SFX = {
-    init, hitBall, cushion, pocket, cueStrike, foul, win,
+    init, hitBall, cushion, pocket, cueStrike, foul, win, crowd,
     setMuted(m) { muted = m; },
     get muted() { return muted; },
   };

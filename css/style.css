@@ -577,12 +577,12 @@ body.mode-versus #potted-tray {
   #top-left {
     top: 10px;
     left: 10px;
-    gap: 14px;
-    padding: 8px 14px;
+    gap: 10px;
+    padding: 6px 10px;   /* 窄屏压缩，避免整行遮住台面 */
   }
 
   .stat {
-    min-width: 36px;
+    min-width: 30px;
   }
 
   .stat span:last-child {
@@ -790,19 +790,40 @@ body.mode-versus #potted-tray {
 }
 
 @media (max-width: 760px) {
+  #potted-tray {
+    top: 56px;          /* 挪到右上角按钮下方，避免与左侧计分板重叠 */
+    left: auto;
+    right: 8px;
+    transform: none;
+  }
+
   #contact-wrap {
-    right: 10px;
-    bottom: 82px;   /* 避开底部居中力度条 */
+    /* 击球点改到右上角垂直堆叠，不再悬于右下角遮挡袋口出杆区 */
+    right: 8px;
+    left: auto;
+    top: 104px;
+    bottom: auto;
     padding: 8px 9px;
     gap: 4px;
   }
 
   #contact-ball {
-    width: 68px;
-    height: 68px;
+    width: 56px;
+    height: 56px;
   }
 
   #contact-tag {
     font-size: 10px;
+  }
+
+  #toast {
+    white-space: normal;    /* 长提示允许换行，避免溢出屏幕 */
+    max-width: 86vw;
+    line-height: 1.5;
+    text-align: center;
+  }
+
+  #power-wrap {
+    padding-bottom: calc(9px + env(safe-area-inset-bottom, 0px));
   }
 }
