@@ -1,5 +1,5 @@
 /* ============================================================
- * server.js —— 极速台球 3D 联机服务器
+ * server.js —— 动感台球 联机服务器
  * 同一端口：HTTP 静态托管页面 + WebSocket 房间匹配与消息中继
  *
  * 角色规则：
@@ -175,7 +175,7 @@ server.listen(PORT, '0.0.0.0', () => {
     }
   }
   console.log('========================================');
-  console.log('  🎱 极速台球 3D 联机服务器已启动');
+  console.log('  🎱 动感台球 联机服务器已启动');
   console.log(`  本机访问:   http://localhost:${PORT}/`);
   for (const ip of ips) console.log(`  局域网访问: http://${ip}:${PORT}/`);
   console.log('  前两名连接者为玩家，之后连接自动进入观战');

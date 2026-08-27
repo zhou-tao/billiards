@@ -18,142 +18,511 @@
   const canvas = $('scene');
   // ?lowgfx 低画质模式：供老机器/集显使用（1倍像素比 + 小阴影贴图）
   const LOWGFX = /[?&]lowgfx\b/.test(location.search);
+  // ?noXXX 调试开关：隐藏场景部件帮助定位渲染问题（nolamp/norig/noboard/nostand）
+  const HIDE = k => location.search.includes('no' + k);
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LOWGFX });
-  renderer.setPixelRatio(LOWGFX ? 1 : Math.min(window.devicePixelRatio, 2));  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(LOWGFX ? 1 : Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.outputEncoding = THREE.sRGBEncoding;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.06;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
 
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0e15);
-  scene.fog = new THREE.Fog(0x0b0e15, 7, 16);
+  const scene = new THREE.Scene();
+  // ?magbg 调试：背景改纯品红，用于判断画面元素的前后层级
+  const MAGBG = location.search.includes('magbg');
+  const BGCOL = MAGBG ? 0xff00ff : 0x030409;
+  scene.background = new THREE.Color(BGCOL);
+  scene.fog = new THREE.Fog(BGCOL, 9, 26);
 
-  const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.05, 60);
+  const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.05, 80);
 
-  /* ================= 灯光 ================= */
-  scene.add(new THREE.AmbientLight(0x8892aa, 0.55));
-  scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x1a1410, 0.5));
+  /* ================= 灯光 ================= */
+  // 赛场氛围：整体压暗，主要亮度集中在球桌正上方的无影灯组（见 buildTableLamp）
+  scene.add(new THREE.AmbientLight(0x8090aa, 0.10));
+  scene.add(new THREE.HemisphereLight(0xa9c2f0, 0x120d08, 0.14));
 
-  const key = new THREE.DirectionalLight(0xfff1dc, 1.05);
-  key.position.set(1.6, 3.2, 1.1);
-  key.castShadow = true;
-  key.shadow.mapSize.set(LOWGFX ? 1024 : 2048, LOWGFX ? 1024 : 2048);
-  key.shadow.camera.near = 0.5;
-  key.shadow.camera.far = 8;
+  // 保留一盏低强度暖光负责投影与球体明暗过渡，不再承担主照明
+  const key = new THREE.DirectionalLight(0xffe8c8, 0.26);
+  key.position.set(1.4, 3.4, 0.9);
+  key.castShadow = true;
+  key.shadow.mapSize.set(LOWGFX ? 1024 : 2048, LOWGFX ? 1024 : 2048);
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 10;
   key.shadow.camera.left = -2.2;
   key.shadow.camera.right = 2.2;
   key.shadow.camera.top = 1.8;
   key.shadow.camera.bottom = -1.8;
-  key.shadow.bias = -0.0004;
-  key.shadow.camera.updateProjectionMatrix();
-  scene.add(key);
+  key.shadow.bias = -0.0004;
+  key.shadow.camera.updateProjectionMatrix();
+  scene.add(key);
 
-  const lampA = new THREE.PointLight(0xffe2b0, 0.5, 7, 2);
-  lampA.position.set(-0.7, 1.5, 0);
-  scene.add(lampA);
-  const lampB = new THREE.PointLight(0xffe2b0, 0.5, 7, 2);
-  lampB.position.set(0.7, 1.5, 0);
+  /* ================= 氛围：球桌顶灯 + 桁架聚光灯 + 看台小动物观众 ================= */
+  const ARENA = { lights: [], bases: [], spots: [], rigs: [], phones: [], pulses: [], rimMat: null };
+  const RAIL_Y = 3.02;                        // 桁架横梁高度（顶灯吊杆挂点）
+  let crowdExciteV = 0;                       // 进球欢呼激励值（随时间衰减）
 
-  /* ================= 氛围：聚光灯柱 + 看台观众 ================= */
-  const ARENA = { lights: [], bases: [], beams: [], crowdPairs: [] };
+  /** 径向渐变光斑贴图：灯具眩光与观众手机屏共用 */
+  function makeGlowTexture() {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 64;
+    const g = cv.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 2, 32, 32, 31);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(cv);
+  }
 
-  function makeCrowdTexture(seed) {
-    const cv = document.createElement("canvas");
-    cv.width = 256; cv.height = 128;
-    const g = cv.getContext("2d");
-    g.fillStyle = "#10172a"; g.fillRect(0, 0, 256, 128);
-    const colors = ["#3d5a80", "#e0a458", "#e07a5f", "#81b29a", "#f2cc8f", "#8d99ae", "#cdb4db", "#a8dadc"];
-    let s = seed || 1;
-    const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-    for (let row = 0; row < 6; row++) {
-      for (let col = 0; col < 24; col++) {
-        const x = 8 + col * 10 + rnd() * 4;
-        const y = 10 + row * 18 + rnd() * 5;
-        g.globalAlpha = 0.5 + rnd() * 0.5;
-        g.beginPath(); g.arc(x, y, 3.2 + rnd() * 2.2, 0, Math.PI * 2);
-        g.fillStyle = colors[(rnd() * colors.length) | 0];
-        g.fill();
-        g.globalAlpha = 1;
-        g.beginPath(); g.arc(x + rnd() * 2, y - 3.4, 2.1, 0, Math.PI * 2);
-        g.fillStyle = "#e8c39e"; g.fill();
-      }
-    }
-    const tex = new THREE.CanvasTexture(cv);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
-  }
+  /** 光锥贴图：出光口最亮，向落点方向渐隐，模拟体积光衰减 */
+  function makeBeamTexture() {
+    const cv = document.createElement('canvas');
+    cv.width = 16; cv.height = 128;
+    const g = cv.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, 0, 128);
+    grad.addColorStop(0, 'rgba(255,255,255,0.85)');
+    grad.addColorStop(0.3, 'rgba(255,255,255,0.40)');
+    grad.addColorStop(0.75, 'rgba(255,255,255,0.12)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 16, 128);
+    return new THREE.CanvasTexture(cv);
+  }
 
-  function buildArena() {
-    // 1) 聚光灯（纯氛围，不开阴影，带光锥网格）
-    const spots = [
-      { x: -1.85, y: 2.75, z: 0.75, tx: 0.1, tz: -0.1, col: 0xfff2dd, pen: 0.50, ang: 0.55 },
-      { x: 1.85, y: 2.75, z: 0.75, tx: -0.1, tz: -0.1, col: 0xfff2dd, pen: 0.50, ang: 0.55 },
-      { x: 0, y: 2.95, z: -1.38, tx: 0, tz: 0.3, col: 0xcfe0ff, pen: 0.42, ang: 0.50 },
-    ];
-    for (const d of spots) {
-      const s = new THREE.SpotLight(d.col, d.pen, 9, d.ang, 0.55, 1.1);
-      s.position.set(d.x, d.y, d.z);
-      s.target.position.set(d.tx, 0, d.tz);
-      scene.add(s);
-      scene.add(s.target);
-      ARENA.lights.push(s);
-      ARENA.bases.push(d.pen);
-      if (!LOWGFX) {
-        const cone = new THREE.Mesh(
-          new THREE.ConeGeometry(0.62, 2.45, 20, 1, true),
-          new THREE.MeshBasicMaterial({ color: d.col, transparent: true, opacity: 0.045, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
-        );
-        cone.position.set(d.x, d.y - 1.22, d.z);
-        cone.lookAt(d.tx, 0, d.tz);
-        cone.rotateX(Math.PI);
-        scene.add(cone);
-        ARENA.beams.push(cone);
-      }
-    }
+  const glowTex = makeGlowTexture();
+  const beamTex = makeBeamTexture();
 
-    // 2) 看台台阶（两侧长边 + 远端）
-    const standMat = new THREE.MeshStandardMaterial({ color: 0x141a2b, roughness: 0.92, metalness: 0 });
-    const mkStand = (x, z, rotY) => {
-      const g = new THREE.Group();
-      for (let r = 0; r < 3; r++) {
-        const step = new THREE.Mesh(new THREE.BoxGeometry(2.55, 0.36, 0.66), standMat);
-        step.position.set(0, -0.04 + r * 0.3, -0.42 + r * 0.34);
-        g.add(step);
-      }
-      g.position.set(x, 0, z);
-      g.rotation.y = rotY;
-      scene.add(g);
-    };
-    mkStand(0, 1.48, 0);
-    mkStand(0, -1.48, Math.PI);
-    mkStand(-1.95, 0, Math.PI / 2);   // 远端看台横跨短边
+  function buildArena() {
+    // 1) 灯光桁架：让灯具“挂”在结构上而不是悬空；归入同一父节点便于俯视时整体隐藏
+    const rigRoot = new THREE.Group();
+    scene.add(rigRoot);
+    ARENA.rig = rigRoot;
+    const rigMat = new THREE.MeshStandardMaterial({ color: 0x151820, roughness: 0.65, metalness: 0.45 });
+    const mkBar = (w, d, x, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, d), rigMat);
+      m.position.set(x, RAIL_Y, z);
+      rigRoot.add(m);
+    };
+    mkBar(4.62, 0.05, 0, 0.75);        // 前横梁：挂两盏侧灯
+    mkBar(4.62, 0.05, 0, -1.38);       // 后横梁：挂后排灯
+    mkBar(0.05, 2.18, -2.285, -0.315); // 左右纵梁封口
+    mkBar(0.05, 2.18, 2.285, -0.315);
+    mkBar(4.57, 0.05, 0, 0);           // 中横梁：吊挂球桌无影灯组
 
-    // 3) 观众（双贴图交叉淡入淡出 = 人群晃动错觉）
-    const mkCrowd = (x, z, w, h, rotY) => {
-      const tA = makeCrowdTexture(7), tB = makeCrowdTexture(23);
-      const mA = new THREE.MeshBasicMaterial({ map: tA, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide });
-      const mB = new THREE.MeshBasicMaterial({ map: tB, transparent: true, opacity: 0.0, depthWrite: false, side: THREE.DoubleSide });
-      const pA = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mA);
-      const pB = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mB);
-      pA.position.set(x, 0.86, z);
-      pB.position.copy(pA.position);
-      pA.rotation.y = rotY;
-      pB.rotation.y = rotY;
-      scene.add(pA);
-      scene.add(pB);
-      ARENA.crowdPairs.push([mA, mB]);
-    };
-    mkCrowd(0, 1.30, 3.05, 0.6, 0);
-    mkCrowd(0, -1.30, 3.05, 0.6, 0);
-    mkCrowd(-1.60, 0, 2.35, 0.6, Math.PI / 2);
-  }
-  buildArena();
-  scene.add(lampB);
+    // 2) 桁架聚光灯：赛场氛围点缀（主照明已移交球桌顶灯组），吊索 + 金属灯体 + 光锥
+    const spots = [
+      { x: -1.85, y: 2.72, z: 0.75, tx: 0.1, tz: -0.1, col: 0xfff2dd, pen: 0.15, ang: 0.55 },
+      { x: 1.85, y: 2.72, z: 0.75, tx: -0.1, tz: -0.1, col: 0xfff2dd, pen: 0.15, ang: 0.55 },
+      // 后灯横向穿越赛场，镜头顺轴望去会把整个光锥叠成一片色板，故不渲染其光锥
+      { x: 0, y: 2.90, z: -1.38, tx: 0, tz: 0.3, col: 0xcfe0ff, pen: 0.12, ang: 0.50, noBeam: true },
+    ];
+    const DOWN = new THREE.Vector3(0, -1, 0);
+    const shellMat = new THREE.MeshStandardMaterial({ color: 0x101319, roughness: 0.5, metalness: 0.6 });
+    for (const d of spots) {
+      if (HIDE('rig')) continue;
+      const s = new THREE.SpotLight(d.col, d.pen, 9, d.ang, 0.55, 1.1);
+      s.position.set(d.x, d.y, d.z);
+      s.target.position.set(d.tx, 0, d.tz);
+      scene.add(s);
+      scene.add(s.target);
+      ARENA.lights.push(s);
+      ARENA.bases.push(d.pen);
 
-  /* ================= 特效系统接入 ================= */
+      const dir = new THREE.Vector3(d.tx - d.x, -d.y, d.tz - d.z);
+      const lenToTgt = dir.length();
+      dir.normalize();
+
+      // 吊索把灯具连到桁架
+      const cableLen = Math.max(0.04, RAIL_Y - 0.03 - d.y);
+      const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, cableLen, 6), rigMat);
+      cable.position.set(d.x, d.y + cableLen / 2, d.z);
+      rigRoot.add(cable);
+
+      // 枢轴（负责每帧微摆）→ 灯头（初始指向瞄准点）
+      const pivot = new THREE.Group();
+      pivot.position.set(d.x, d.y, d.z);
+      const head = new THREE.Group();
+      head.quaternion.setFromUnitVectors(DOWN, dir);
+      pivot.add(head);
+
+      const shell = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.058, 0.17, 14), shellMat);
+      shell.position.y = -0.10;
+      head.add(shell);
+      const lens = new THREE.Mesh(
+        new THREE.CircleGeometry(0.05, 16),
+        new THREE.MeshBasicMaterial({ color: d.col, toneMapped: false })
+      );
+      lens.rotation.x = Math.PI / 2;   // 镜片面朝出光方向（-Y）
+      lens.position.y = -0.185;
+      head.add(lens);
+      const glare = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTex, color: d.col, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, fog: false,
+      }));
+      glare.scale.setScalar(0.5);
+      glare.position.y = -0.21;
+      head.add(glare);
+
+      if (!LOWGFX && !d.noBeam) {
+        // 光束刻意短小：长锥在镜头顺轴看去时会叠成满屏色板
+        const beamLen = Math.min(lenToTgt * 0.42, 1.05);
+        const mkBeam = (radius, op) => {
+          const geo = new THREE.ConeGeometry(radius, beamLen, 22, 1, true);
+          geo.translate(0, -beamLen / 2, 0);   // 锥顶在灯口、开口朝下
+          const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+            map: beamTex, color: d.col, transparent: true, opacity: op,
+            blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+            toneMapped: false, fog: false,
+          }));
+          mesh.frustumCulled = false;
+          return mesh;
+        };
+        head.add(mkBeam(0.30, 0.30));        // 外层柔光
+        head.add(mkBeam(0.13, 0.50));        // 内层亮芯
+      }
+      rigRoot.add(pivot);
+      ARENA.spots.push({ pivot, tgt: s.target, dir, len: lenToTgt, base: pivot.position.clone(), ph: Math.random() * Math.PI * 2 });
+    }
+
+    // 3) 环绕 LED 广告围挡：分隔比赛区与观众区（参考职业赛场地布置）
+    const rimMat = new THREE.MeshStandardMaterial({
+      color: 0xb8c8ff, emissive: 0x8ea6ff, emissiveIntensity: 0.45, roughness: 0.4,
+    });
+    ARENA.rimMat = rimMat;
+    function makeBoardTexture() {
+      const cv = document.createElement('canvas');
+      cv.width = 1024; cv.height = 96;
+      const g = cv.getContext('2d');
+      const grad = g.createLinearGradient(0, 0, 1024, 0);
+      grad.addColorStop(0, '#101c3a'); grad.addColorStop(0.5, '#231044'); grad.addColorStop(1, '#0d1530');
+      g.fillStyle = grad; g.fillRect(0, 0, 1024, 96);
+      g.globalAlpha = 0.22;
+      for (let x = -96, i = 0; x < 1120; x += 64, i++) {
+        g.fillStyle = i % 2 ? '#3f6cff' : '#ff4d6d';
+        g.beginPath();
+        g.moveTo(x, 96); g.lineTo(x + 32, 0); g.lineTo(x + 50, 0); g.lineTo(x + 18, 96);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+      g.font = 'italic bold 42px Arial, "PingFang SC", "Microsoft YaHei", sans-serif';
+      g.textBaseline = 'middle';
+      g.fillStyle = 'rgba(255,255,255,.94)';
+      ['动感台球', '汪汪能源', '小鱼干·赞助', '猫薄荷杯 MINT'].forEach((w, i) => {
+        g.fillText(w, i * 256 + 26, 52);
+      });
+      const tex = new THREE.CanvasTexture(cv);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.encoding = THREE.sRGBEncoding;
+      return tex;
+    }
+    const boardTexBase = makeBoardTexture();
+    function mkBoardWall(len, x, z, rotY) {
+      if (HIDE('board')) return;
+      const tex = boardTexBase.clone();
+      tex.needsUpdate = true;
+      tex.repeat.x = len / 2.6;
+      const wall = new THREE.Group();
+      const backing = new THREE.Mesh(
+        new THREE.BoxGeometry(len, 0.30, 0.03),
+        new THREE.MeshStandardMaterial({ color: 0x0a1020, roughness: 0.85 })
+      );
+      backing.position.y = 0.15;
+      wall.add(backing);
+      // 贴图以平面正面始终朝向场内，杜绝 Box 面片带来的文字镜像
+      const face = new THREE.Mesh(
+        new THREE.PlaneGeometry(len, 0.30),
+        new THREE.MeshBasicMaterial({ map: tex, toneMapped: false })
+      );
+      face.rotation.y = Math.PI;
+      face.position.set(0, 0.15, -0.018);
+      wall.add(face);
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(len + 0.01, 0.018, 0.03), rimMat);
+      rim.position.y = 0.31;
+      wall.add(rim);
+      wall.position.set(x, 0, z);
+      wall.rotation.y = rotY;
+      scene.add(wall);
+    }
+    const BOARD_LZ = 1.55, BOARD_SX = 2.12;   // 离球台外沿留出球员走道
+    mkBoardWall(3.40, 0, BOARD_LZ, 0);
+    mkBoardWall(3.40, 0, -BOARD_LZ, Math.PI);
+    mkBoardWall(1.90, BOARD_SX, 0, Math.PI / 2);
+    mkBoardWall(1.90, -BOARD_SX, 0, -Math.PI / 2);
+
+    // 4) 看台：四面环形，距球桌更远、四层台阶更大规模
+    const standMat = new THREE.MeshStandardMaterial({ color: 0x141a2b, roughness: 0.92, metalness: 0 });
+    const stands = [];
+    const ROWS = 4, SEATS = 12;
+    function mkStand(x, z, rotY, width) {
+      if (HIDE('stand')) return;
+      const g = new THREE.Group();
+      for (let r = 0; r < ROWS; r++) {
+        const step = new THREE.Mesh(new THREE.BoxGeometry(width, 0.42, 0.74), standMat);
+        step.position.set(0, -0.02 + r * 0.33, -0.44 + r * 0.37);
+        step.receiveShadow = true;
+        g.add(step);
+      }
+      g.position.set(x, 0, z);
+      g.rotation.y = rotY;
+      scene.add(g);
+      stands.push({ g, width });
+    }
+    mkStand(0, 2.60, 0, 3.90);             // 长边两侧
+    mkStand(0, -2.60, Math.PI, 3.90);
+    mkStand(3.05, 0, Math.PI / 2, 3.00);   // 短边两侧
+    mkStand(-3.05, 0, -Math.PI / 2, 3.00);
+
+    // 5) 观众：小动物（小猫 / 小狗）坐姿低模，逐只配色、逐相位晃动欢呼
+    const bodyGeo = new THREE.CapsuleGeometry(0.056, 0.085, 3, 10);
+    const headGeo = new THREE.SphereGeometry(0.049, 10, 9);
+    const earGeo = new THREE.ConeGeometry(0.021, 0.06, 4);
+    const tailGeo = new THREE.CylinderGeometry(0.009, 0.015, 0.17, 6);
+    tailGeo.translate(0, 0.085, 0);   // 尾巴以根部为轴，方便摆动
+    const furPal = [0xe0913c, 0xdccfb8, 0x8e929c, 0x7a5433, 0x3a3f41, 0xcaa26b, 0xf0e6d4];
+    const furMatB = new THREE.MeshStandardMaterial({ roughness: 0.96, emissive: 0x08090e });
+    const furMatH = new THREE.MeshStandardMaterial({ roughness: 0.94, emissive: 0x0a0b10 });
+    const _cv = new THREE.Color(), _white = new THREE.Color(1, 1, 1), _light = new THREE.Color();
+
+    for (const st of stands) {
+      const g = st.g, w = st.width;
+      const animals = [];
+      for (let r = 0; r < ROWS; r++) {
+        for (let j = 0; j < SEATS; j++) {
+          if (Math.random() > 0.93) continue;                  // 留几个空座更自然
+          animals.push({
+            x: (j - (SEATS - 1) / 2) * (w / SEATS) + (Math.random() - 0.5) * 0.06,
+            y: 0.19 + r * 0.33,                                // 所坐台阶的顶面高度
+            z: -0.44 + r * 0.37 + (Math.random() - 0.5) * 0.04,
+            s: 0.82 + Math.random() * 0.30,                    // 高矮体型差
+            dog: Math.random() < 0.42,                         // 0=小猫 1=小狗
+            lean: (Math.random() - 0.5) * 0.26,
+            ph: Math.random() * Math.PI * 2,
+            ph2: Math.random() * Math.PI * 2,
+            bob: 0.007 + Math.random() * 0.013,
+          });
+        }
+      }
+      const n = animals.length;
+      const bodies = new THREE.InstancedMesh(bodyGeo, furMatB, n);
+      const heads = new THREE.InstancedMesh(headGeo, furMatH, n);
+      const ears = new THREE.InstancedMesh(earGeo, furMatH, n * 2);
+      const tails = new THREE.InstancedMesh(tailGeo, furMatH, n);
+      [bodies, heads, ears, tails].forEach(m => { m.frustumCulled = false; g.add(m); });
+      for (let i = 0; i < n; i++) {
+        const fur = _cv.setHex(furPal[(Math.random() * furPal.length) | 0]);
+        _light.copy(fur).lerp(_white, 0.25);                   // 头部毛色略浅
+        bodies.setColorAt(i, fur);
+        heads.setColorAt(i, _light);
+        ears.setColorAt(i * 2, _light);
+        ears.setColorAt(i * 2 + 1, _light);
+        tails.setColorAt(i, fur);
+      }
+      ARENA.rigs.push({ animals, bodies, heads, ears, tails });
+
+      // 看台里的手机星光点（粉丝拍摄中）
+      if (!LOWGFX) {
+        for (let k = 0; k < 7 && k < n; k++) {
+          const p = animals[(Math.random() * n) | 0];
+          const sm = new THREE.SpriteMaterial({
+            map: glowTex, color: Math.random() < 0.75 ? 0xcfe2ff : 0xffe3b0,
+            transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+          });
+          const spark = new THREE.Sprite(sm);
+          spark.scale.setScalar(0.085);
+          spark.position.set(p.x + (Math.random() - 0.5) * 0.15, p.y + 0.30 * p.s, p.z + 0.05);
+          g.add(spark);
+          ARENA.phones.push({ mat: sm, ph: Math.random() * Math.PI * 2, w: 1.4 + Math.random() * 2.2 });
+        }
+      }
+
+      // 看台正前补一盏冷色微光，让小动物有轮廓受光，与球桌暖光形成对比
+      if (!LOWGFX) {
+        const fill = new THREE.PointLight(0x91a8ff, 0.10, 2.2, 2);
+        fill.position.set(0, 1.55, -0.55);
+        g.add(fill);
+      }
+    }
+  }
+  buildArena();
+
+  /** 球桌正上方无影灯组：经典绿色长罩 + 柔光面板 + 主照明光源，吊杆挂于桁架中横梁 */
+  function buildTableLamp() {
+    if (HIDE('lamp')) return;
+    const Y = 1.58;                           // 灯罩中心高度
+    const rigDark = new THREE.MeshStandardMaterial({ color: 0x151820, roughness: 0.65, metalness: 0.45 });
+    // 壳体用不受光材质：聚光灯光源位于罩内，受光材质会被自己的灯光打亮
+    const shadeMat = new THREE.MeshBasicMaterial({ color: 0x081209 });
+    const glowCol = 0xffeecb;
+
+    // 顶灯统一挂在一个父节点下：俯视模式整体隐藏，避免灯罩挡住台面
+    const lampRoot = new THREE.Group();
+    scene.add(lampRoot);
+    ARENA.lamp = lampRoot;
+
+    // 吊杆 ×2 → 桁架中横梁
+    for (const sx of [-1, 1]) {
+      const len = RAIL_Y - 0.025 - Y;
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, len, 8), rigDark);
+      rod.position.set(sx * 0.86, Y + len / 2, 0);
+      lampRoot.add(rod);
+    }
+
+    // 灯罩外壳（近黑绿哑光，弱化体积感）+ 暖白柔光出光面
+    const grp = new THREE.Group();
+    grp.position.y = Y;
+    lampRoot.add(grp);
+    grp.add(new THREE.Mesh(new THREE.BoxGeometry(2.56, 0.13, 0.36), shadeMat));
+    if (!HIDE('panel')) {
+      const diffuser = new THREE.Mesh(
+        new THREE.BoxGeometry(2.46, 0.016, 0.32),
+        new THREE.MeshBasicMaterial({ color: glowCol, toneMapped: false })
+      );
+      diffuser.position.y = -0.069;
+      grp.add(diffuser);
+
+      // 出光口四周的暖光细边条：任意角度都能看到灯体在发光
+      const edgeMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
+      for (const sz of [-1, 1]) {
+        const edge = new THREE.Mesh(new THREE.BoxGeometry(2.57, 0.012, 0.014), edgeMat);
+        edge.position.set(0, -0.069, sz * 0.182);
+        grp.add(edge);
+      }
+      for (const sx of [-1, 1]) {
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.012, 0.364), edgeMat);
+        cap.position.set(sx * 1.285, -0.069, 0);
+        grp.add(cap);
+      }
+    }
+
+    // 三颗高亮“灯管”亮芯贴片 + 眩光（低画质跳过眩光）
+    for (const bx of [-0.78, 0, 0.78]) {
+      if (HIDE('glow')) continue;
+      const bulb = new THREE.Mesh(
+        new THREE.CircleGeometry(0.075, 18),
+        new THREE.MeshBasicMaterial({ color: 0xfff8e6, toneMapped: false })
+      );
+      bulb.rotation.x = Math.PI / 2;
+      bulb.position.set(bx, -0.088, 0);
+      grp.add(bulb);
+      if (!LOWGFX) {
+        const gl = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: glowTex, color: glowCol, transparent: true, opacity: 0.75,
+          blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, fog: false,
+        }));
+        gl.scale.setScalar(0.72);
+        gl.position.set(bx, -0.13, 0);
+        grp.add(gl);
+      }
+    }
+
+    // （顶灯不再使用体积光锥：开口向下的锥体在斜上方视角会铺满台面形成雾板）
+
+    // 实际光源：两盏下照聚光（窄锥贴住球桌，不外溢照亮看台）+ 中央补光
+    const addPulse = HIDE('lpl') ? () => {} : (l, base) => ARENA.pulses.push({ l, base });
+    for (const sx of [-1, 1]) {
+      if (HIDE('lpl')) break;
+      const s = new THREE.SpotLight(0xffe7bf, 0.88, 4.2, 0.44, 0.60, 1.0);
+      s.position.set(sx * 0.60, Y - 0.06, 0);
+      s.target.position.set(sx * 0.60, 0, 0);
+      scene.add(s);
+      scene.add(s.target);
+      addPulse(s, 0.88);
+    }
+    if (!HIDE('lpl')) {
+      const mid = new THREE.PointLight(0xffdfae, 0.24, 2.2, 2.0);
+      mid.position.set(0, Y - 0.10, 0);
+      scene.add(mid);
+      addPulse(mid, 0.24);
+    }
+  }
+  buildTableLamp();
+
+  /** 每帧氛围驱动：灯光呼吸 / 光锥微摆 / 小动物观众晃动欢呼（耳抖尾摇） */
+  const _ae = new THREE.Euler(), _aq = new THREE.Quaternion(), _ae2 = new THREE.Euler(),
+        _q2 = new THREE.Quaternion(),
+        _ap = new THREE.Vector3(), _as = new THREE.Vector3(), _am = new THREE.Matrix4();
+  function arenaTick(t, dt) {
+    for (let i = 0; i < ARENA.lights.length; i++)
+      ARENA.lights[i].intensity = ARENA.bases[i] * (0.86 + 0.14 * Math.sin(t * 1.9 + i * 2.2));
+
+    // 球桌顶灯轻微呼吸闪烁
+    for (const p of ARENA.pulses)
+      p.l.intensity = p.base * (1 + 0.05 * Math.sin(t * 1.15 + p.base * 7));
+
+    for (const sp of ARENA.spots) {
+      sp.pivot.rotation.x = Math.sin(t * 0.8 + sp.ph) * 0.02;
+      sp.pivot.rotation.z = Math.cos(t * 0.63 + sp.ph) * 0.02;
+      sp.tgt.position.copy(sp.dir).applyEuler(sp.pivot.rotation).multiplyScalar(sp.len).add(sp.base);
+    }
+
+    crowdExciteV *= Math.exp(-1.25 * dt);
+    const E = crowdExciteV;
+
+    // 围挡 LED 灯带随欢呼增亮
+    if (ARENA.rimMat)
+      ARENA.rimMat.emissiveIntensity = 0.42 + 0.18 * (0.5 + 0.5 * Math.sin(t * 2.6)) + 0.8 * E;
+
+    for (const rig of ARENA.rigs) {
+      const A = rig.animals;
+      for (let i = 0; i < A.length; i++) {
+        const a = A[i];
+        const dy = Math.sin(t * 3.1 + a.ph) * a.bob +                    // 常时轻晃
+                   Math.max(0, Math.sin(t * 7.3 + a.ph)) * 0.055 * E;    // 欢呼时蹦跳
+
+        // —— 身体（狗壮猫瘦）——
+        _ae.set(a.lean + Math.sin(t * 2.2 + a.ph) * (0.03 + 0.10 * E), 0, 0);
+        _aq.setFromEuler(_ae);
+        _as.set(a.s, a.s * (a.dog ? 1.03 : 0.94), a.s * 1.06);
+        _ap.set(a.x, a.y + 0.105 * a.s + dy, a.z);
+        rig.bodies.setMatrixAt(i, _am.compose(_ap, _aq, _as));
+
+        // —— 头（常时小点头，进球激动抬头）——
+        _ae2.set(a.lean * 0.5 + Math.sin(t * 3.4 + a.ph2) * (0.05 + 0.22 * E), 0, 0);
+        _q2.setFromEuler(_ae2);
+        const hs = a.s * (a.dog ? 1.07 : 1.0);
+        _as.set(hs, hs, hs * 1.08);
+        _ap.set(a.x, a.y + 0.248 * a.s + dy, a.z - 0.010 * a.s);
+        rig.heads.setMatrixAt(i, _am.compose(_ap, _q2, _as));
+
+        // —— 耳朵（猫耳直立尖、兴奋抽动；狗耳短圆外耷）——
+        for (let e = 0; e < 2; e++) {
+          const side = e ? 1 : -1;
+          const twitch = 1 + Math.sin(t * (6 + 9 * E) + a.ph2 + e * 2.1) * (0.10 + 0.28 * E);
+          _ae2.set(
+            a.dog ? 0.55 : -0.10 + Math.sin(t * 2.7 + a.ph) * 0.05,
+            0,
+            side * (a.dog ? 1.05 : 0.20)
+          );
+          _q2.setFromEuler(_ae2);
+          _as.set(a.s * (a.dog ? 1.55 : 1.05), a.s * (a.dog ? 0.60 : 1.0) * twitch, a.s);
+          _ap.set(a.x + side * 0.030 * a.s, a.y + 0.290 * a.s + dy, a.z - 0.008 * a.s);
+          rig.ears.setMatrixAt(i * 2 + e, _am.compose(_ap, _q2, _as));
+        }
+
+        // —— 尾巴（猫尾斜上扬、狗尾后翘；欢呼加速摇摆）——
+        _ae2.set(a.dog ? 1.15 : 0.45, 0, Math.sin(t * (2.2 + 9 * E) + a.ph2) * (0.18 + 0.5 * E));
+        _q2.setFromEuler(_ae2);
+        _as.setScalar(a.s * (a.dog ? 1.12 : 0.92));
+        _ap.set(a.x, a.y + 0.015 + dy * 0.4, a.z + 0.074 * a.s);
+        rig.tails.setMatrixAt(i, _am.compose(_ap, _q2, _as));
+      }
+      rig.bodies.instanceMatrix.needsUpdate = true;
+      rig.heads.instanceMatrix.needsUpdate = true;
+      rig.ears.instanceMatrix.needsUpdate = true;
+      rig.tails.instanceMatrix.needsUpdate = true;
+    }
+
+    for (const f of ARENA.phones)
+      f.mat.opacity = clamp(0.10 + 0.45 * (0.5 + 0.5 * Math.sin(t * f.w + f.ph)) ** 2 + 0.5 * E, 0, 1);
+  }
+
+  /** 进球时的观众激励：短暂欢腾弹跳 */
+  function crowdExcite(v) { crowdExciteV = Math.min(1.6, crowdExciteV + v); }
+
+  /* ================= 特效系统接入 ================= */
   FX.init(scene);
 
   /* ================= 台球桌 ================= */
@@ -169,78 +538,133 @@
   const table = new THREE.Group();
   scene.add(table);
   {
-    const clothMat = new THREE.MeshStandardMaterial({ color: 0x0e7a44, roughness: 0.94, metalness: 0 });
-    const cushMat = new THREE.MeshStandardMaterial({ color: 0x0a5c33, roughness: 0.9 });
-    const woodMat = new THREE.MeshStandardMaterial({ color: 0x4a2f1d, roughness: 0.55, metalness: 0.05 });
+    const clothMat = new THREE.MeshStandardMaterial({ color: 0x0b7a42, roughness: 0.94, metalness: 0 });
+    const cushMat = clothMat;   // 库边立面同台呢绿布（斯诺克传统包法）
+    // 深红棕漆面木框（库边压条 / 围板），参照传统斯诺克球桌
+    const woodMat = new THREE.MeshPhysicalMaterial({
+      color: 0x5e1820, roughness: 0.26, metalness: 0.05,
+      clearcoat: 0.9, clearcoatRoughness: 0.16,
+    });
+    const brassMat = new THREE.MeshStandardMaterial({ color: 0xb08b4f, roughness: 0.32, metalness: 0.85 });
 
-    // 台呢（顶面正好在 y=0）
-    const cloth = mkBox(TABLE_W + 0.14, 0.02, TABLE_H + 0.14, 0, -0.01, 0, clothMat);
-    cloth.castShadow = false;
+    // 台呢（顶面正好在 y=0）
+    const cloth = mkBox(TABLE_W + 0.14, 0.02, TABLE_H + 0.14, 0, -0.01, 0, clothMat);
+    cloth.castShadow = false;
 
-    // 库边：6 段，袋口处留缺
-    const CUSH_D = 0.05, CUSH_H = 0.045;
-    const cornerGap = 0.105, sideGap = 0.078;
-    const lx0 = -HALF_W + cornerGap, lx1 = -sideGap, lx2 = sideGap, lx3 = HALF_W - cornerGap;
-    function cushionSeg(len, cx, cz, alongX) {
-      const g = alongX
-        ? new THREE.BoxGeometry(len, CUSH_H, CUSH_D)
-        : new THREE.BoxGeometry(CUSH_D, CUSH_H, len);
-      const m = new THREE.Mesh(g, cushMat);
-      m.position.set(cx, CUSH_H / 2, cz);
-      m.castShadow = m.receiveShadow = true;
-      table.add(m);
-    }
-    for (const s of [-1, 1]) {
-      const cz = s * (HALF_H + CUSH_D / 2);
-      cushionSeg(lx1 - lx0, (lx0 + lx1) / 2, cz, true);
-      cushionSeg(lx3 - lx2, (lx2 + lx3) / 2, cz, true);
-      cushionSeg(TABLE_H - 2 * cornerGap, s * (HALF_W + CUSH_D / 2), 0, false);
-    }
+    // 库边：绿呢垫条（立面与压条同色系），6 段留出袋口
+    const CUSH_D = 0.05, CUSH_H = 0.042;
+    const cornerGap = 0.105, sideGap = 0.078;
+    const lx0 = -HALF_W + cornerGap, lx1 = -sideGap, lx2 = sideGap, lx3 = HALF_W - cornerGap;
+    // 压条用略深的同系绿色，与台面浑然一体
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x09633a, roughness: 0.92 });
+    function cushionSeg(len, cx, cz, alongX) {
+      const g = alongX
+        ? new THREE.BoxGeometry(len, CUSH_H, CUSH_D)
+        : new THREE.BoxGeometry(CUSH_D, CUSH_H, len);
+      const m = new THREE.Mesh(g, cushMat);
+      m.position.set(cx, CUSH_H / 2, cz);
+      m.castShadow = m.receiveShadow = true;
+      table.add(m);
+      // 压条：比立面略宽，盖住呢面接缝
+      const t = alongX
+        ? new THREE.BoxGeometry(len, 0.013, CUSH_D + 0.008)
+        : new THREE.BoxGeometry(CUSH_D + 0.008, 0.013, len);
+      const cap = new THREE.Mesh(t, capMat);
+      cap.position.set(cx, CUSH_H + 0.0055, cz);
+      cap.castShadow = cap.receiveShadow = true;
+      table.add(cap);
+    }
+    for (const s of [-1, 1]) {
+      const cz = s * (HALF_H + CUSH_D / 2);
+      cushionSeg(lx1 - lx0, (lx0 + lx1) / 2, cz, true);
+      cushionSeg(lx3 - lx2, (lx2 + lx3) / 2, cz, true);
+      cushionSeg(TABLE_H - 2 * cornerGap, s * (HALF_W + CUSH_D / 2), 0, false);
+    }
 
-    // 木质围板
-    const RAIL_T = 0.10, RAIL_H = 0.055;
-    const railY = RAIL_H / 2 - 0.004;
-    const rz = HALF_H + CUSH_D + RAIL_T / 2;
-    const rx = HALF_W + CUSH_D + RAIL_T / 2;
-    mkBox(TABLE_W + 2 * CUSH_D + 2 * RAIL_T, RAIL_H, RAIL_T, 0, railY, rz, woodMat);
-    mkBox(TABLE_W + 2 * CUSH_D + 2 * RAIL_T, RAIL_H, RAIL_T, 0, railY, -rz, woodMat);
-    mkBox(RAIL_T, RAIL_H, TABLE_H + 2 * CUSH_D, rx, railY, 0, woodMat);
-    mkBox(RAIL_T, RAIL_H, TABLE_H + 2 * CUSH_D, -rx, railY, 0, woodMat);
+    // 台面外圈：一整块带圆角的环形面板（圆角矩形挖孔后挤出成型）
+    const RAIL_T = 0.10;
+    function buildRoundedRect(target, hx, hz, r) {
+      target.moveTo(-hx + r, -hz);
+      target.lineTo(hx - r, -hz);
+      target.quadraticCurveTo(hx, -hz, hx, -hz + r);
+      target.lineTo(hx, hz - r);
+      target.quadraticCurveTo(hx, hz, hx - r, hz);
+      target.lineTo(-hx + r, hz);
+      target.quadraticCurveTo(-hx, hz, -hx, hz - r);
+      target.lineTo(-hx, -hz + r);
+      target.quadraticCurveTo(-hx, -hz, -hx + r, -hz);
+    }
+    const HX_OUT = HALF_W + CUSH_D + RAIL_T - 0.01;
+    const HZ_OUT = HALF_H + CUSH_D + RAIL_T - 0.01;
+    const frameShape = new THREE.Shape();
+    buildRoundedRect(frameShape, HX_OUT, HZ_OUT, 0.15);
+    const holePath = new THREE.Path();
+    buildRoundedRect(holePath, HALF_W + CUSH_D + 0.0035, HALF_H + CUSH_D + 0.0035, 0.088);
+    frameShape.holes.push(holePath);
+    const PANEL_DEPTH = 0.016;
+    const panelGeo = new THREE.ExtrudeGeometry(frameShape, {
+      depth: PANEL_DEPTH, bevelEnabled: false,
+      curveSegments: 14,
+    });
+    const panel = new THREE.Mesh(panelGeo, woodMat);
+    panel.rotation.x = -Math.PI / 2;                   // 形状 XY 落到 XZ 平面，厚度向上
+    // 面板顶面与库边压条顶面齐平（无高度差就不会产生间隔视觉差）
+    panel.position.y = 0.038;
+    panel.receiveShadow = true;
+    table.add(panel);
 
-    // 桌裙与桌腿
-    mkBox(TABLE_W + 0.52, 0.17, TABLE_H + 0.52, 0, -0.105, 0, woodMat);
-    const legGeo = new THREE.CylinderGeometry(0.052, 0.062, 0.56, 12);
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-      const leg = new THREE.Mesh(legGeo, woodMat);
-      leg.position.set(sx * (HALF_W - 0.12), -0.44, sz * (HALF_H - 0.06));
-      leg.castShadow = true;
-      table.add(leg);
-    }
+    // 内部支撑裙箱：收在圆角面板轮廓以内，任何视角都不可见，仅供桌腿衔接与遮底
+    mkBox(TABLE_W - 0.1, 0.17, TABLE_H - 0.1, 0, -0.105, 0, woodMat);
 
-    // 地面
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 30),
-      new THREE.MeshStandardMaterial({ color: 0x12151d, roughness: 1 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -0.72;
-    floor.receiveShadow = true;
-    scene.add(floor);
+    const legProfile = [
+      [0.075, 0], [0.068, 0.02], [0.042, 0.07], [0.052, 0.17],
+      [0.036, 0.30], [0.042, 0.40], [0.054, 0.50], [0.058, 0.555],
+    ].map(p => new THREE.Vector2(p[0], p[1]));
+    const legGeo = new THREE.LatheGeometry(legProfile, 18);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      const leg = new THREE.Mesh(legGeo, brassMat);
+      leg.position.set(sx * (HALF_W - 0.15), -0.718, sz * (HALF_H - 0.08));
+      leg.castShadow = true;
+      table.add(leg);
+    }
 
-    // 袋口（黑洞 + 皮质环）
-    const holeMat = new THREE.MeshBasicMaterial({ color: 0x04050a });
-    const rimMat = new THREE.MeshStandardMaterial({ color: 0x24160e, roughness: 0.6 });
-    for (const p of POCKETS) {
-      const hole = new THREE.Mesh(new THREE.CircleGeometry(p.r + 0.012, 32), holeMat);
-      hole.rotation.x = -Math.PI / 2;
-      hole.position.set(p.x, 0.0022, p.z);
-      table.add(hole);
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(p.r + 0.012, 0.007, 10, 32), rimMat);
-      rim.rotation.x = -Math.PI / 2;
-      rim.position.set(p.x, 0.003, p.z);
-      rim.castShadow = true;
-      table.add(rim);
-    }
+    // 地面：赛场地毯（中心稍亮、四周沉入黑暗的暗角）
+    const carpetCv = document.createElement('canvas');
+    carpetCv.width = carpetCv.height = 512;
+    {
+      const c = carpetCv.getContext('2d');
+      const g = c.createRadialGradient(256, 256, 60, 256, 256, 300);
+      g.addColorStop(0, '#232c49');
+      g.addColorStop(0.55, '#161d33');
+      g.addColorStop(1, '#070a14');
+      c.fillStyle = g;
+      c.fillRect(0, 0, 512, 512);
+      c.globalAlpha = 0.05;
+      for (let i = 0; i < 512; i += 8) {   // 极淡的织物纹路
+        c.fillStyle = i % 16 ? '#ffffff' : '#000000';
+        c.fillRect(0, i, 512, 1);
+        c.fillRect(i, 0, 1, 512);
+      }
+    }
+    const carpetTex = new THREE.CanvasTexture(carpetCv);
+    carpetTex.encoding = THREE.sRGBEncoding;
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(34, 34),
+      new THREE.MeshStandardMaterial({ map: carpetTex, color: 0xffffff, roughness: 0.97 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.72;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // 袋口：只保留洞口本身（不加任何遮罩物）
+    const holeMat = new THREE.MeshBasicMaterial({ color: 0x04050a });
+    for (const p of POCKETS) {
+      const hole = new THREE.Mesh(new THREE.CircleGeometry(p.r + 0.03, 32), holeMat);
+      hole.rotation.x = -Math.PI / 2;
+      hole.position.set(p.x, 0.0022, p.z);
+      table.add(hole);
+    }
 
     // 置球点与开球线标记
     const spotMat = new THREE.MeshBasicMaterial({ color: 0xdfe6ee, transparent: true, opacity: 0.5 });
@@ -251,24 +675,8 @@
       table.add(spot);
     }
 
-    // 围板上的星点标记（钻石位）
-    const sightMat = new THREE.MeshBasicMaterial({ color: 0xd8cba8 });
-    const sightGeo = new THREE.CircleGeometry(0.005, 12);
-    function sight(x, z) {
-      const m = new THREE.Mesh(sightGeo, sightMat);
-      m.rotation.x = -Math.PI / 2;
-      m.position.set(x, RAIL_H + 0.001, z);
-      table.add(m);
-    }
-    for (const f of [-0.75, -0.5, -0.25, 0.25, 0.5, 0.75]) {
-      sight(f * HALF_W, rz);
-      sight(f * HALF_W, -rz);
-    }
-    for (const f of [-0.5, 0.5]) {
-      sight(rx, f * HALF_H);
-      sight(-rx, f * HALF_H);
-    }
-  }
+    // （真实球台围板上的钻石位标记在游戏比例下易被误认为杂点，已移除）
+  }
 
   /* ================= 球体生成 ================= */
   const BALL_COLORS = {
@@ -330,13 +738,14 @@
     return m;
   }
 
-  /* ================= 物理世界与规则状态 ================= */
-  let state = 'READY';              // READY | AIM | ROLL | OVER
-  let score = 0, shots = 0, startTime = 0;
-  let pottedThisShot = [];
-  let cueFouled = false;
-  let clearedPending = false;
-  let cueBall = null;
+  /* ================= 物理世界与规则状态 ================= */
+  let state = 'READY';              // READY | AIM | ROLL | OVER
+  let score = 0, shots = 0, startTime = 0;
+  let pottedThisShot = [];
+  let cueFouled = false;
+  let clearedPending = false;
+  let arcadePotted = 0;             // 街机模式已落袋彩球数（清台判定用）
+  let cueBall = null;
 
   /* ---- 双人对战（八球规则）状态：裁决逻辑在 rules.js ---- */
   let gameMode = 'arcade';          // 'arcade' 单人街机 | 'versus' 本地双人对战
@@ -429,18 +838,22 @@
         cueFouled = true;
         if (isAuthority()) showToast('💥 白球落袋！', 'bad');
       } else {
-                SFX.crowd();   // 观众为进球轻声欢呼
-pottedThisShot.push(e.ballId);
+        SFX.crowd(1);   // 观众为进球欢呼
+        crowdExcite(1);
+        pottedThisShot.push(e.ballId);
         rules.notePot(e.ballId);
-        if (gameMode === 'arcade') {
-          addScore(100);
-          showToast('🎯 ' + e.ballId + ' 号球落袋 +100', 'good');
-          addTrayBadge(e.ballId);
-          if (!world.balls.some(b => b.id !== 0 && (b.active || b.sinking))) {
-            clearedPending = true;
-          }
-          updateHUD();
-        } else if (isAuthority()) {
+        if (gameMode === 'arcade') {
+          addScore(100);
+          showToast('🎯 ' + e.ballId + ' 号球落袋 +100', 'good');
+          addTrayBadge(e.ballId);
+          // 计数判定而非检查场上 active/sinking：连续落袋时前一球还在播下沉动画，
+          // 场面检查会漏判，导致清台后胜利界面不出现
+          arcadePotted++;
+          if (arcadePotted >= 15) {
+            clearedPending = true;
+          }
+          updateHUD();
+        } else if (isAuthority()) {
           rules.updateNeed8(isBallOnTable);
           updateVersusHUD();
           updateHUD();
@@ -887,8 +1300,9 @@ pottedThisShot.push(e.ballId);
           input.power = 0;
         }
         break;
-      case 'KeyV': setTopView(!topMode); break;
-      case 'KeyM': toggleMute(); break;
+case 'KeyV': setTopView(!topMode); break;
+      case 'KeyM': toggleMute(); break;
+      case 'Escape': closeSettings(); break;
       case 'KeyR':
         if (state !== 'READY') requestRestart();
         break;
@@ -934,20 +1348,24 @@ case 'ArrowLeft':
   let savedCam = null;
   const shakeVec = new THREE.Vector3();
 
-  function setTopView(on) {
-    if (on === topMode) return;
-    topMode = on;
-    if (on) {
-      savedCam = { yaw: camGoal.yaw, pitch: camGoal.pitch, radius: camGoal.radius };
-      camGoal.pitch = 1.545;
-      camGoal.radius = Math.max(camGoal.radius, 3.0);
-    } else if (savedCam) {
-      camGoal.yaw = savedCam.yaw;
-      camGoal.pitch = savedCam.pitch;
-      camGoal.radius = savedCam.radius;
-    }
-    $('btn-top').style.background = on ? 'rgba(40,220,140,.35)' : '';
-  }
+  function setTopView(on) {
+    if (on === topMode) return;
+    topMode = on;
+    if (on) {
+      savedCam = { yaw: camGoal.yaw, pitch: camGoal.pitch, radius: camGoal.radius };
+      // pitch 从正上方数起：0 = 桌面正上方垂直俯视（略偏一点避免 lookAt 退化）
+      camGoal.pitch = 0.03;
+      camGoal.radius = Math.max(camGoal.radius, 3.0);
+    } else if (savedCam) {
+      camGoal.yaw = savedCam.yaw;
+      camGoal.pitch = savedCam.pitch;
+      camGoal.radius = savedCam.radius;
+    }
+    // 俯视时移开头顶灯罩与桁架灯具，台面一览无遗（光源本身无形，保留照明）
+    if (ARENA.lamp) ARENA.lamp.visible = !on;
+    if (ARENA.rig) ARENA.rig.visible = !on;
+    $('btn-top').style.background = on ? 'rgba(40,220,140,.35)' : '';
+  }
 
   function updateCamera(dt) {
     const k = 1 - Math.exp(-10 * dt);
@@ -998,9 +1416,10 @@ case 'ArrowLeft':
     return s;
   }
 
-  function addTrayBadge(id) {
-    tray.appendChild(makeBadge(id));
-  }
+function addTrayBadge(id) {
+    tray.appendChild(makeBadge(id));
+    tray.classList.remove('hidden');   // 有球才展示已落袋托盘
+  }
 
   let toastTimer = null;
   function showToast(text, kind) {
@@ -1022,14 +1441,14 @@ case 'ArrowLeft':
     if (powerFill.dataset.v !== String(p)) {
       powerFill.dataset.v = String(p);
       powerFill.style.width = p + '%';
-      powerPct.textContent = p + '%';
+      powerPct.textContent = p;
     }
   }
 
-  function toggleMute() {
-    SFX.setMuted(!SFX.muted);
-    $('btn-sound').textContent = SFX.muted ? '🔇' : '🔊';
-  }
+function toggleMute() {
+    SFX.setMuted(!SFX.muted);
+    $('btn-sound').textContent = SFX.muted ? '声音 关' : '声音 开';
+  }
 
   function hideOverlays() {
     $('overlay').classList.add('hidden');
@@ -1209,7 +1628,7 @@ state = 'AIM';
 
   function versusWin(winner, reason) {
     state = 'OVER';
-        SFX.crowd();
+        SFX.crowd(1.6);
 SFX.win();
     FX.spawnRing(0, 0, 6);
     FX.spawnSparks(0, 0.06, 0, 6);
@@ -1236,7 +1655,7 @@ SFX.win();
   /** 观战/对手端展示对局结果 */
   function netShowWin(winner, reason) {
     state = 'OVER';
-        SFX.crowd();
+        SFX.crowd(1.6);
 SFX.win();
     FX.spawnRing(0, 0, 6);
     FX.spawnSparks(0, 0.06, 0, 6);
@@ -1270,7 +1689,7 @@ SFX.win();
 
   function victory() {
     state = 'OVER';
-        SFX.crowd();
+        SFX.crowd(1.6);
 SFX.win();
     FX.spawnRing(0, 0, 6);
     FX.spawnSparks(0, 0.06, 0, 6);
@@ -1284,16 +1703,18 @@ SFX.win();
     $('victory').classList.remove('hidden');
   }
 
-  function restart() {
-    for (const b of world.balls) if (b.mesh) scene.remove(b.mesh);
-    world.reset();
-    score = 0; shots = 0;
-    startTime = Date.now();
-    tray.innerHTML = '';
-    pottedThisShot = [];
-    cueFouled = false;
-    clearedPending = false;
-    pendingShot = null;
+  function restart() {
+    for (const b of world.balls) if (b.mesh) scene.remove(b.mesh);
+    world.reset();
+    score = 0; shots = 0;
+    startTime = Date.now();
+    tray.innerHTML = '';
+    tray.classList.add('hidden');   // 无进球时不展示已落袋托盘
+    pottedThisShot = [];
+    cueFouled = false;
+    clearedPending = false;
+    arcadePotted = 0;
+    pendingShot = null;
     input.power = 0;
     input.charging = false;
     input.spaceCharging = false;
@@ -1396,11 +1817,22 @@ if (!window.__autoDone) {
           }
         }
 if (window.__DEBUG && (window.__fc & 15) === 0) {
-      const dbg = document.getElementById('dbg');
-      dbg.classList.remove('hidden');
-      let sinkN = 0;
-      for (const b of world.balls) if (b.sinking) sinkN++;
-      dbg.textContent = 'fc=' + window.__fc + ' errs=' + (window.__errs.join(' | ') || 'none') +
+      const dbg = document.getElementById('dbg');
+      dbg.classList.remove('hidden');
+      let sinkN = 0;
+      for (const b of world.balls) if (b.sinking) sinkN++;
+      // 一次性场景图清点（?sceneinfo 触发，结果写进 errs 区读取）
+      if (!window.__dumped && location.search.includes('sceneinfo')) {
+        window.__dumped = 1;
+        const kinds = {};
+        scene.traverse(o => {
+          const k = o.type + (o.geometry ? '|' + o.geometry.type : '') +
+            (o.material && o.material.color ? '#' + o.material.color.getHexString() : '');
+          kinds[k] = (kinds[k] || 0) + 1;
+        });
+        window.__errs.push('SCENE ' + JSON.stringify(kinds));
+      }
+      dbg.textContent = 'fc=' + window.__fc + ' errs=' + (window.__errs.join(' | ') || 'none') +
         ' st=' + state + '/' + gameMode + ' turn=' + rules.player + ' open=' + rules.open +
         ' mv=' + world.moving + ' sink=' + sinkN +
         ' sk=' + world.balls.filter(b => b.sinking).map(b => b.id + ':' + b.sinkT.toFixed(2)).join(',') +
@@ -1444,14 +1876,8 @@ if (window.__DEBUG && (window.__fc & 15) === 0) {
     updateCuePose();
     updateCamera(dt);
     updatePowerUI();
-        // 氛围动效：聚光灯呼吸 + 人群晃动 + 光柱微摆
-    const _t = clock.getElapsedTime();
-    for (let _i = 0; _i < ARENA.lights.length; _i++) ARENA.lights[_i].intensity = ARENA.bases[_i] * (0.86 + 0.14 * Math.sin(_t * 1.9 + _i * 2.2));
-    if (ARENA.crowdPairs.length) {
-      const _p = 0.5 + 0.5 * Math.sin(_t * 2.1);
-      for (const [_mA, _mB] of ARENA.crowdPairs) { _mA.opacity = 0.35 + 0.55 * _p; _mB.opacity = 0.35 + 0.55 * (1 - _p); }
-    }
-    for (const _b of ARENA.beams) _b.rotation.z = Math.sin(_t * 0.6) * 0.02;
+    // 氛围动效：灯光呼吸 / 光锥微摆（与照射点联动）/ 观众晃动欢呼
+    arenaTick(clock.getElapsedTime(), dt);
 renderer.render(scene, camera);
 
     if (state === 'ROLL') checkSettle();
@@ -1612,6 +2038,12 @@ const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').match
     showToast(mode === 'versus'
       ? '双人对战 · 「' + localNames[1] + '」先开球！'
       : coarse ? '开球！点按瞄准 · 向后拖拽蓄力，松开出杆 🎯' : '开球！把彩球打进袋里 🎯', 'good');
+    // ?reviewcam 调试观景机位：斜上方俯瞰整个赛场（验证灯光/看台布局用）
+    if (new URLSearchParams(location.search).has('reviewcam')) {
+      camGoal.yaw = Math.PI * 0.78;
+      camGoal.pitch = 0.60;
+      camGoal.radius = 4.7;
+    }
   }
 $('btn-arcade').addEventListener('click', () => startGame('arcade'));
 $('btn-online').addEventListener('click', () => {
@@ -1631,9 +2063,47 @@ $('btn-online').addEventListener('click', () => {
   });
   $('btn-leave').addEventListener('click', () => NET.close());
   $('btn-again').addEventListener('click', () => requestRestart());
-  $('btn-restart').addEventListener('click', () => requestRestart());
-  $('btn-top').addEventListener('click', () => setTopView(!topMode));
-  $('btn-sound').addEventListener('click', toggleMute);
+$('btn-restart').addEventListener('click', () => requestRestart());
+  $('btn-top').addEventListener('click', () => setTopView(!topMode));
+  $('btn-sound').addEventListener('click', toggleMute);
+
+  /* 设置菜单折叠：点齿轮展开/收起；点菜单外或选中任意项后自动收起 */
+  const settingsMenu = $('settings-menu');
+  const settingsBtn = $('btn-settings');
+  function openSettingsMenu(open) {
+    settingsMenu.classList.toggle('hidden', !open);
+    settingsBtn.classList.toggle('open', open);
+    settingsBtn.setAttribute('aria-expanded', String(open));
+  }
+  function closeSettings() {
+    openSettingsMenu(false);
+  }
+  settingsBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    openSettingsMenu(settingsMenu.classList.contains('hidden'));
+  });
+  settingsMenu.addEventListener('click', () => closeSettings());
+  document.addEventListener('click', e => {
+    if (e.target.closest('#settings')) return;   // 菜单内部已自行处理
+    closeSettings();
+  });
+
+  /* 退出游戏：单机/本地双人直接回主菜单；联机先断开，close 回调会复位 UI */
+  function exitGame() {
+    if (netInGame()) {
+      NET.close();
+      netRole = null;
+      netWaiting = false;
+      return;
+    }
+    document.body.classList.remove('mode-versus');
+    gameMode = 'arcade';
+    netWaiting = false;
+    restart();
+    $('victory').classList.add('hidden');
+    $('overlay').classList.remove('hidden');
+  }
+  $('btn-exit').addEventListener('click', exitGame);
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -1641,11 +2111,16 @@ $('btn-online').addEventListener('click', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  /* 开机 */
-  setupNet();
-  buildCue();
-  buildGuide();
-  restart();
-  animate();
+  /* 开机 */
+  setupNet();
+  buildCue();
+  buildGuide();
+  restart();
+  animate();
+  if (window.__DEBUG) window.__G = { scene, camera };   // 调试只读探针：场景图
+  // ?autostart 调试：跳过开始界面直接进入单人街机
+  if (window.__DEBUG && new URLSearchParams(location.search).has('autostart')) {
+    setTimeout(() => startGame('arcade'), 400);
+  }
 })();
 
