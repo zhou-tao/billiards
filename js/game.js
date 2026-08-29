@@ -6,10 +6,12 @@
 (function () {
   'use strict';
 
-  const { BALL_R, TABLE_W, TABLE_H, POCKETS, Ball, World, applyStrike } = PoolPhys;
-  const HALF_W = TABLE_W / 2;
-  const HALF_H = TABLE_H / 2;
-  const MAX_SHOT_SPEED = 6.4;
+  const { BALL_R, TABLE_W, TABLE_H, POCKETS, LIMIT_X, LIMIT_Z, Ball, World, applyStrike } = PoolPhys;
+  const HALF_W = TABLE_W / 2;
+  const HALF_H = TABLE_H / 2;
+  const MAX_SHOT_SPEED = 6.4;
+  /** 自由球摆放校验所需的物理常量（传给 rules.validatePlacement） */
+  const PHYS_DIMS = { LIMIT_X, LIMIT_Z, BALL_R, POCKETS };
 
   const $ = id => document.getElementById(id);
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -757,7 +759,12 @@
   };
   let shotFirstContact = null;      // 本杆白球首个碰到的球 id
   let shotOpen = true;              // 出杆瞬间的球台开放状态
-  let shotNeed8 = { 1: false, 2: false };
+  let shotNeed8 = { 1: false, 2: false };
+  let shotCushionAfterContact = false; // 首碰之后任意球是否碰过库边（"无碰库"犯规判定，issue #6）
+
+  /* ---- 自由球（ball-in-hand，issue #6）---- */
+  let ballInHandFor = 0;            // 0=无 | 1|2=该玩家可任意摆放白球
+  let placingBallInHand = false;    // 本机正在摆放（鼠标/触屏选定落点）
 
   /* ---- 联机（versus-net）状态 ---- */
   const NET = new NetClient();
@@ -825,8 +832,9 @@
       }
       FX.ballHit(e);
       SFX.hitBall(e.intensity);
-    } else if (e.type === 'cushion') {
-      FX.spawnSparks(e.x, 0.03, e.z, e.intensity * 0.5);
+    } else if (e.type === 'cushion') {
+      if (shotFirstContact !== null) shotCushionAfterContact = true;   // 首碰后的碰库记录（规则用）
+      FX.spawnSparks(e.x, 0.03, e.z, e.intensity * 0.5);
       if (e.intensity > 0.5) FX.flash(e.x, 0.03, e.z, e.intensity * 0.5);
       SFX.cushion(e.intensity);
     } else if (e.type === 'pocket') {
@@ -931,7 +939,81 @@
     cueBall.rp = { x: spot.x, z: spot.z };
   }
 
-  /* ================= 出杆动画 ================= */
+  /* ================= 自由球摆放（issue #6） ================= */
+  // 半透明白色 ghost：摆放模式跟随指针，绿色=合法落点，红色=非法
+  const bihGhost = new THREE.Mesh(
+    new THREE.SphereGeometry(BALL_R, 24, 16),
+    new THREE.MeshBasicMaterial({ color: 0x7cfc00, transparent: true, opacity: 0.45, depthWrite: false })
+  );
+  bihGhost.visible = false;
+  scene.add(bihGhost);
+
+  /** 犯规后进入自由球：pl 号玩家可把白球摆到任意合法位置 */
+  function beginBallInHand(pl) {
+    ballInHandFor = pl;
+    cueBall.active = false;          // 白球离桌，等待摆放
+    cueBall.sinking = false;
+    cueBall.stop();
+    if (cueBall.mesh) cueBall.mesh.visible = false;
+    const mine = !netInGame() || netRole === (pl === 1 ? 'p1' : 'p2');
+    placingBallInHand = mine && state !== 'OVER';
+    bihGhost.visible = placingBallInHand;
+    // ghost 初始停在开球线附近（若该处不合法，第一条指针消息会立刻更新）
+    bihGhost.position.set(clamp(cueBall.pos.x, -LIMIT_X, LIMIT_X), BALL_R, clamp(cueBall.pos.z, -LIMIT_Z, LIMIT_Z));
+    refreshBihGhostColor();
+    if (placingBallInHand) showToast('🖐 自由球 · 移动选择位置，点击台面摆放白球', 'good');
+    else showToast(pname(pl) + ' 获得自由球', '');
+  }
+
+  function refreshBihGhostColor() {
+    bihGhost.material.color.setHex(
+      rules.validatePlacement(bihGhost.position.x, bihGhost.position.z, world.balls, PHYS_DIMS)
+        ? 0x7cfc00 : 0xff5252);
+  }
+
+  function updateBihGhost(cx, cy) {
+    const p = tablePointFromClient(cx, cy);
+    if (!p) return;
+    bihGhost.position.set(clamp(p.x, -LIMIT_X, LIMIT_X), BALL_R, clamp(p.z, -LIMIT_Z, LIMIT_Z));
+    refreshBihGhostColor();
+  }
+
+  /** 把白球放到指定位置并恢复可击打状态（网络同步由调用方负责） */
+  function applyCuePlacement(x, z) {
+    cueBall.active = true;
+    cueBall.sinking = false;
+    cueBall.stop();
+    cueBall.pos.x = x;
+    cueBall.pos.z = z;
+    cueBall.vel.x = cueBall.vel.z = 0;
+    if (cueBall.mesh) {
+      cueBall.mesh.visible = true;
+      cueBall.mesh.scale.set(1, 1, 1);
+      cueBall.mesh.position.set(x, BALL_R, z);
+    }
+    cueBall.rp = { x, z };
+    ballInHandFor = 0;
+    placingBallInHand = false;
+    bihGhost.visible = false;
+  }
+
+  /** 本机玩家确认摆放：本地校验后应用，并按角色上报/广播落点 */
+  function confirmPlacement() {
+    if (!placingBallInHand) return;
+    const x = bihGhost.position.x, z = bihGhost.position.z;
+    if (!rules.validatePlacement(x, z, world.balls, PHYS_DIMS)) {
+      showToast('该位置不合法 · 避开球和袋口', 'bad');
+      return;
+    }
+    applyCuePlacement(x, z);
+    if (netInGame() && netRole === 'p1') {
+      NET.send({ t: 'cuePlaced', x, z });        // 权威端广播权威落点
+    } else if (netInGame() && netRole === 'p2') {
+      NET.send({ t: 'placeCue', x, z });         // 交给房主校验并回广播
+    }
+  }
+
+  /* ================= 出杆动画 ================= */
   let pendingShot = null;   // { dir:{x,z}, speed, power, startPull, applied }
   let strikeT = 0;
 
@@ -951,8 +1033,9 @@
       applied: false,
     };
     strikeT = 0;
-    shots++;
-    shotFirstContact = null;
+    shots++;
+    shotFirstContact = null;
+    shotCushionAfterContact = false;
     if (gameMode === 'versus') {
       shotOpen = rules.open;
       shotNeed8 = { 1: rules.need8[1], 2: rules.need8[2] };
@@ -979,8 +1062,8 @@
       FX.addShake(0.003 + pendingShot.power * 0.007);
       if (preBalls) {
         NET.send({
-          t: 'shot',
-          balls: preBalls,
+          t: 'authoritativeShot',
+          balls: preBalls,
           angle: input.aimAngle,
           power: pendingShot.power,
           contact: pendingShot.contact,
@@ -1187,8 +1270,8 @@
     if (p > 0.02 && canActNow()) {
       if (netInGame() && netRole === 'p2') {
         // 玩家2：把出杆指令发给房主，由房主权威模拟后回播
-        NET.send({ t: 'aim', angle: input.aimAngle, power: p, contact: input.contact });
-        NET.send({ t: 'shot', angle: input.aimAngle, power: p, contact: input.contact });
+        NET.send({ t: 'aim', angle: input.aimAngle, power: p, contact: input.contact });
+        NET.send({ t: 'shotRequest', angle: input.aimAngle, power: p, contact: input.contact });
       } else {
         shoot(p);
       }
@@ -1207,30 +1290,33 @@
       canvas.setPointerCapture(e.pointerId);
       return;
     }
-    if (e.button !== 0) return;
-    if (!canActNow()) return;
+    if (e.button !== 0) return;
+    if (placingBallInHand) { updateBihGhost(e.clientX, e.clientY); return; }   // 自由球：先定位 ghost
+    if (!canActNow()) return;
     if (e.pointerType === 'touch') updateAimFromClient(e.clientX, e.clientY);
     beginCharge(e.clientX, e.clientY);
     canvas.setPointerCapture(e.pointerId);
   });
 
-  canvas.addEventListener('pointermove', e => {
-    if (input.orbiting) {
-      camGoal.yaw -= (e.clientX - input.lastX) * 0.005;
-      camGoal.pitch = clamp(camGoal.pitch + (e.clientY - input.lastY) * 0.004, 0.22, 1.53);
-      input.lastX = e.clientX; input.lastY = e.clientY;
-      return;
-    }
-    if (state === 'AIM' && myTurn() && !netWaiting) {
+  canvas.addEventListener('pointermove', e => {
+    if (input.orbiting) {
+      camGoal.yaw -= (e.clientX - input.lastX) * 0.005;
+      camGoal.pitch = clamp(camGoal.pitch + (e.clientY - input.lastY) * 0.004, 0.22, 1.53);
+      input.lastX = e.clientX; input.lastY = e.clientY;
+      return;
+    }
+    if (placingBallInHand) { updateBihGhost(e.clientX, e.clientY); return; }   // 自由球：ghost 跟随指针
+    if (state === 'AIM' && myTurn() && !netWaiting) {
       if (input.charging) { moveCharge(e.clientX, e.clientY); return; }
       if (e.pointerType === 'mouse' && cueBall.active) updateAimFromClient(e.clientX, e.clientY);
     }
   });
 
-  function endPointer() {
-    if (input.orbiting) { input.orbiting = false; return; }
-    if (input.charging) releaseCharge();
-  }
+  function endPointer() {
+    if (input.orbiting) { input.orbiting = false; return; }
+    if (placingBallInHand) { confirmPlacement(); return; }   // 自由球：抬起确认落点
+    if (input.charging) releaseCharge();
+  }
   window.addEventListener('pointerup', endPointer);
   window.addEventListener('pointercancel', endPointer);
 
@@ -1331,8 +1417,8 @@ case 'ArrowLeft':
       input.spaceCharging = false;
       if (input.power > 0.02 && canActNow()) {
         if (netInGame() && netRole === 'p2') {
-          NET.send({ t: 'aim', angle: input.aimAngle, power: input.power, contact: input.contact });
-          NET.send({ t: 'shot', angle: input.aimAngle, power: input.power, contact: input.contact });
+          NET.send({ t: 'aim', angle: input.aimAngle, power: input.power, contact: input.contact });
+          NET.send({ t: 'shotRequest', angle: input.aimAngle, power: input.power, contact: input.contact });
         } else {
           shoot(input.power);
         }
@@ -1515,8 +1601,8 @@ state = 'AIM';
       b.active = !!s.a;
       b.sinking = !!s.s;
       b.stop();
-      b.pos.x = s.x;
-      b.pos.z = s.z;
+      b.pos.x = clamp(s.x, -LIMIT_X, LIMIT_X);
+      b.pos.z = clamp(s.z, -LIMIT_Z, LIMIT_Z);
       b.vel.x = b.vel.z = 0;
       b.sinkT = 0;
       b.sinkPocket = s.pi >= 0 ? POCKETS[s.pi] : null;
@@ -1572,13 +1658,14 @@ state = 'AIM';
 
   function resolveShotVersus() {
     const me = rules.player;
-    const act = rules.resolve({
-      potted: pottedThisShot,
-      cueFouled,
-      firstContact: shotFirstContact,
-      shotOpen,
-      shotNeed8,
-    });
+    const act = rules.resolve({
+      potted: pottedThisShot,
+      cueFouled,
+      firstContact: shotFirstContact,
+      cushionAfterContact: shotCushionAfterContact,
+      shotOpen,
+      shotNeed8,
+    });
 
     if (act.type === 'win') {
       versusWin(act.winner, act.reason);
@@ -1595,11 +1682,12 @@ state = 'AIM';
       msgs.push('分组：' + pname(1) + '打' + (rules.groups[1] === 'solid' ? '全色' : '条纹') +
         ' / ' + pname(2) + '打' + (rules.groups[2] === 'solid' ? '全色' : '条纹'));
     }
-    if (act.foul) {
-      if (cueFouled) respawnCue();
-      SFX.foul();
-      msgs.push('⚠ ' + pname(me) + '犯规：' + act.foulReason);
-    } else if (act.keepTurn) {
+    if (act.foul) {
+      SFX.foul();
+      msgs.push('⚠ ' + pname(me) + '犯规：' + act.foulReason);
+      beginBallInHand(act.player);   // 所有犯规 → 下一位玩家自由球（不再回固定点，issue #6）
+      msgs.push(pname(act.player) + ' 获得自由球');
+    } else if (act.keepTurn) {
       msgs.push('漂亮！' + pname(act.player) + '继续击球');
     } else if (act.pottedOppOnly) {
       msgs.push(pname(me) + '进了对方的球 · 轮到' + pname(act.player));
@@ -1620,52 +1708,77 @@ state = 'AIM';
         balls: serializeBalls(),
         rules: snapshotRules(),
         score, shots,
-        msgs,
-        over: false,
-      });
+        msgs,
+        bih: ballInHandFor,
+        over: false,
+      });
     }
   }
 
-  function versusWin(winner, reason) {
-    state = 'OVER';
-        SFX.crowd(1.6);
-SFX.win();
-    FX.spawnRing(0, 0, 6);
-    FX.spawnSparks(0, 0.06, 0, 6);
-    FX.addShake(0.018);
-    setTimeout(() => { if (state === 'OVER') FX.spawnSparks(0.5, 0.06, 0.3, 5); }, 260);
-    setTimeout(() => { if (state === 'OVER') FX.spawnSparks(-0.5, 0.06, -0.3, 5); }, 520);
-    $('v-title').textContent = '🏆 ' + pname(winner) + ' 获胜！';
-    $('v-stats').innerHTML =
-      (reason ? '胜负原因：<b>' + reason + '</b><br>' : '') +
-      '共用 <b>' + shots + '</b> 杆 · 用时 <b>' + fmtTime(Date.now() - startTime) + '</b>';
-    $('victory').classList.remove('hidden');
-    if (netInGame() && netRole === 'p1') {
-      NET.send({
-        t: 'settled',
-        over: true, winner, reason,
-        balls: serializeBalls(),
-        rules: snapshotRules(),
-        score, shots,
-        msgs: [],
-      });
-    }
-  }
+  /** 安全渲染结算文案：全部用 textContent/创建节点，任何字符串都不会被解析为 HTML（issue #3） */
+  function setVictoryStats(segments) {
+    const el = $('v-stats');
+    el.textContent = '';
+    for (const seg of segments) {
+      if (seg.br) { el.appendChild(document.createElement('br')); continue; }
+      if (seg.b) {
+        const b = document.createElement('b');
+        b.textContent = seg.t;
+        el.appendChild(b);
+      } else {
+        el.appendChild(document.createTextNode(seg.t));
+      }
+    }
+  }
 
-  /** 观战/对手端展示对局结果 */
-  function netShowWin(winner, reason) {
-    state = 'OVER';
-        SFX.crowd(1.6);
+  /** 远端传来的胜负原因只认规则引擎枚举值，白名单之外一律丢弃（issue #3） */
+  function safeWinReason(reason) {
+    return (typeof Protocol !== 'undefined' && Protocol.isWinReason(reason)) ? reason : null;
+  }
+
+  function versusWin(winner, reason) {
+    state = 'OVER';
+        SFX.crowd(1.6);
 SFX.win();
-    FX.spawnRing(0, 0, 6);
-    FX.spawnSparks(0, 0.06, 0, 6);
-    FX.addShake(0.018);
-    $('v-title').textContent = '🏆 ' + pname(winner) + ' 获胜！';
-    $('v-stats').innerHTML =
-      (reason ? '胜负原因：<b>' + reason + '</b><br>' : '') +
-      '共用 <b>' + shots + '</b> 杆';
-    $('victory').classList.remove('hidden');
-  }
+    FX.spawnRing(0, 0, 6);
+    FX.spawnSparks(0, 0.06, 0, 6);
+    FX.addShake(0.018);
+    setTimeout(() => { if (state === 'OVER') FX.spawnSparks(0.5, 0.06, 0.3, 5); }, 260);
+    setTimeout(() => { if (state === 'OVER') FX.spawnSparks(-0.5, 0.06, -0.3, 5); }, 520);
+    $('v-title').textContent = '🏆 ' + pname(winner) + ' 获胜！';
+    const tail = [
+      { t: '共用 ' }, { t: String(shots), b: true }, { t: ' 杆 · 用时 ' },
+      { t: fmtTime(Date.now() - startTime), b: true },
+    ];
+    setVictoryStats(reason ? [{ t: '胜负原因：' }, { t: reason, b: true }, { br: true }, ...tail] : tail);
+    $('victory').classList.remove('hidden');
+    if (netInGame() && netRole === 'p1') {
+      NET.send({
+        t: 'settled',
+        over: true, winner, reason,
+        balls: serializeBalls(),
+        rules: snapshotRules(),
+        score, shots,
+        msgs: [],
+      });
+    }
+  }
+
+  /** 观战/对手端展示对局结果：winner/reason 均来自网络，先过白名单再渲染 */
+  function netShowWin(winner, reason) {
+    state = 'OVER';
+        SFX.crowd(1.6);
+SFX.win();
+    FX.spawnRing(0, 0, 6);
+    FX.spawnSparks(0, 0.06, 0, 6);
+    FX.addShake(0.018);
+    const w = winner === 1 || winner === 2 ? winner : 1;
+    const rs = safeWinReason(reason);
+    $('v-title').textContent = '🏆 ' + pname(w) + ' 获胜！';
+    const tail = [{ t: '共用 ' }, { t: String(shots), b: true }, { t: ' 杆' }];
+    setVictoryStats(rs ? [{ t: '胜负原因：' }, { t: rs, b: true }, { br: true }, ...tail] : tail);
+    $('victory').classList.remove('hidden');
+  }
 
   function updateVersusHUD() {
     if (gameMode !== 'versus' && gameMode !== 'versus-net') return;
@@ -1696,10 +1809,11 @@ SFX.win();
     FX.addShake(0.018);
     setTimeout(() => { if (state === 'OVER') FX.spawnSparks(0.5, 0.06, 0.3, 5); }, 260);
     setTimeout(() => { if (state === 'OVER') FX.spawnSparks(-0.5, 0.06, -0.3, 5); }, 520);
-    $('v-title').textContent = '🏆 清台成功！';
-    $('v-stats').innerHTML =
-      '最终得分 <b>' + score + '</b> · 共用 <b>' + shots + '</b> 杆 · 用时 <b>' +
-      fmtTime(Date.now() - startTime) + '</b>';
+    $('v-title').textContent = '🏆 清台成功！';
+    setVictoryStats([
+      { t: '最终得分 ' }, { t: String(score), b: true }, { t: ' · 共用 ' },
+      { t: String(shots), b: true }, { t: ' 杆 · 用时 ' }, { t: fmtTime(Date.now() - startTime), b: true },
+    ]);
     $('victory').classList.remove('hidden');
   }
 
@@ -1718,8 +1832,12 @@ SFX.win();
     input.power = 0;
     input.charging = false;
     input.spaceCharging = false;
-    shotFirstContact = null;
-    rules.reset();
+    shotFirstContact = null;
+    shotCushionAfterContact = false;
+    ballInHandFor = 0;
+    placingBallInHand = false;
+    bihGhost.visible = false;
+    rules.reset();
     state = 'AIM';
     rackBalls();
     spawnCueBall();
@@ -1945,38 +2063,63 @@ renderer.render(scene, camera);
       lobbyStatus('对手已离开 · 等待新对手加入…');
       netBadge();
     });    NET.on('aim', d => {
-      remoteAim.angle = d.angle || 0;
-      remoteAim.power = d.power || 0;
-      remoteAim.contact = d.contact || remoteAim.contact;
+      const aimV = Protocol.validateAim(d);   // 白名单校验，非法数值不进入瞄准状态
+      if (!aimV) return;
+      remoteAim.angle = aimV.angle;
+      remoteAim.power = aimV.power;
+      remoteAim.contact = aimV.contact;
       remoteAim.t = window.__fc;
     });
-    NET.on('shot', d => {
-      // 无球面快照的裸指令是玩家2发给房主的出杆请求，仅房主执行；
-      // 带快照的是房主权威广播，对手与观众都据此本地模拟
-      if (!d.balls) {
-        if (netRole !== 'p1') return;
-        // 权威端回合校验：只接受轮到玩家2且局面就绪时的出杆指令
-        if (state !== 'AIM' || !cueBall.active || netWaiting || rules.player !== 2) {
-          showToast('⚠ 忽略了对方的出杆指令（回合校验）', '');
-          return;
-        }
-      }
-      restoreBalls(d.balls || []);
-      shoot(d.power, d.angle, d.contact);
-    });
-    NET.on('settled', d => {
-      restoreBalls(d.balls || []);
-      if (d.rules) applyRulesSnap(d.rules);
-      score = d.score | 0;
-      shots = d.shots | 0;
-      updateHUD();
-      updateVersusHUD();
-      const msgs = d.msgs || [];
-      if (msgs.length) showToast(msgs.join(' · '), '');   // 与房主端提示保持一致
-      if (d.over) netShowWin(d.winner, d.reason);
-      else state = 'AIM';
-      resetContact();
-    });
+    NET.on('shotRequest', d => {
+      // 玩家2 的出杆请求（服务端已按 socket 角色重写类型，伪造的快照不会到达这里）：
+      // 仅房主执行，且必须过回合校验（issue #4）
+      const v = Protocol.validateShotRequest(d);
+      if (!v || netRole !== 'p1') return;
+      if (state !== 'AIM' || !cueBall.active || netWaiting || rules.player !== 2) {
+        showToast('⚠ 忽略了对方的出杆指令（回合校验）', '');
+        return;
+      }
+      shoot(v.power, v.angle, v.contact);
+    });
+    NET.on('authoritativeShot', d => {
+      // 房主权威广播：对手与观众据此本地模拟（服务端+本地双重 schema 校验）
+      const v = Protocol.validateAuthoritativeShot(d);
+      if (!v || netRole === 'p1') return;
+      restoreBalls(v.balls);
+      shoot(v.power, v.angle, v.contact);
+    });
+    NET.on('placeCue', d => {
+      // 玩家2 的自由球落点：权威端校验合法性后应用并广播
+      const v = Protocol.validatePlaceCue(d);
+      if (!v || netRole !== 'p1' || ballInHandFor !== 2) return;
+      if (!rules.validatePlacement(v.x, v.z, world.balls, PHYS_DIMS)) return;
+      applyCuePlacement(v.x, v.z);
+      NET.send({ t: 'cuePlaced', x: v.x, z: v.z });
+    });
+    NET.on('cuePlaced', d => {
+      // 权威落点广播：对手与观众同步（房主自己刚广播过，忽略回声）
+      const v = Protocol.validateCuePlaced(d);
+      if (!v || netRole === 'p1') return;
+      applyCuePlacement(v.x, v.z);
+    });
+    NET.on('settled', d => {
+      const v = Protocol.validateSettled(d);   // 全字段白名单校验，非法消息整条丢弃
+      if (!v) return;
+      pendingShot = null;                      // 权威结算到达即丢弃本地未完成的模拟，防止状态机卡在 ROLL
+      restoreBalls(v.balls);
+      if (v.rules) applyRulesSnap(v.rules);
+      score = v.score;
+      shots = v.shots;
+      updateHUD();
+      updateVersusHUD();
+      if (v.msgs.length) showToast(v.msgs.join(' · '), '');   // textContent 渲染，与房主端一致
+      if (v.over) netShowWin(v.winner, v.reason);
+      else {
+        state = 'AIM';
+        if (v.bih) beginBallInHand(v.bih);     // 犯规后自由球
+      }
+      resetContact();
+    });
     NET.on('restart', () => {
       restart();
       state = 'AIM';
