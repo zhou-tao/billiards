@@ -27,15 +27,17 @@
   const LIMIT_X = TABLE_W / 2 - BALL_R;  // 球心可到达的边界
   const LIMIT_Z = TABLE_H / 2 - BALL_R;
 
-  // 六个袋口：四角 + 两长边中点（r=捕获半径，mouth=库边不反弹区域）
-  const POCKETS = [
-    { x: -TABLE_W / 2, z: -TABLE_H / 2, r: 0.066, mouth: 0.150 },
-    { x:  TABLE_W / 2, z: -TABLE_H / 2, r: 0.066, mouth: 0.150 },
-    { x: -TABLE_W / 2, z:  TABLE_H / 2, r: 0.066, mouth: 0.150 },
-    { x:  TABLE_W / 2, z:  TABLE_H / 2, r: 0.066, mouth: 0.150 },
-    { x: 0, z: -TABLE_H / 2, r: 0.058, mouth: 0.110 },
-    { x: 0, z:  TABLE_H / 2, r: 0.058, mouth: 0.110 },
-  ];
+  // 六个袋口：四角 + 两长边中点（r=捕获半径，mouth=库边不反弹区域）
+  // 袋口中心向台外偏置：洞口大部分位于库边鼻线以外、嵌进外框让位缺口，与视觉开孔一致
+  // （角袋对角外偏 ≤0.014：再大会出现贴角停球不落袋）
+  const POCKETS = [
+    { x: -TABLE_W / 2 - 0.014, z: -TABLE_H / 2 - 0.014, r: 0.066, mouth: 0.150 },
+    { x:  TABLE_W / 2 + 0.014, z: -TABLE_H / 2 - 0.014, r: 0.066, mouth: 0.150 },
+    { x: -TABLE_W / 2 - 0.014, z:  TABLE_H / 2 + 0.014, r: 0.066, mouth: 0.150 },
+    { x:  TABLE_W / 2 + 0.014, z:  TABLE_H / 2 + 0.014, r: 0.066, mouth: 0.150 },
+    { x: 0, z: -TABLE_H / 2 - 0.030, r: 0.058, mouth: 0.110 },
+    { x: 0, z:  TABLE_H / 2 + 0.030, r: 0.058, mouth: 0.110 },
+  ];
 
   /** 是否处于某个袋口区域（此区域内库边不反弹，球可以滑入袋口） */
   function inPocketZone(x, z) {
@@ -248,9 +250,18 @@
             break;
           }
         }
-        if (sunk) continue;
-        // 袋口区兜底：擦过袋口而越出台呢的活动球，压回台面（袋口牙），不落袋也不卡进桌框
-        if (b.pos.x > LIMIT_X || b.pos.x < -LIMIT_X || b.pos.z > LIMIT_Z || b.pos.z < -LIMIT_Z) {
+        if (sunk) continue;
+        // 袋口牙兜底：越出台呢的活动球压回台面（袋口牙），不落袋也不卡进桌框
+        // 豁免：袋口让位区内且正朝洞口运动的球——它正滑向捕获圈，压回会导致永远进不了洞；
+        // 若它最终停在界外或往外溜，下一帧仍会被袋口牙弹回台面
+        let towardPocket = false;
+        if (inPocketZone(b.pos.x, b.pos.z)) {
+          for (const p of POCKETS) {
+            if ((p.x - b.pos.x) * b.vel.x + (p.z - b.pos.z) * b.vel.z > 0) { towardPocket = true; break; }
+          }
+        }
+        if (!towardPocket &&
+            (b.pos.x > LIMIT_X || b.pos.x < -LIMIT_X || b.pos.z > LIMIT_Z || b.pos.z < -LIMIT_Z)) {
           if (b.pos.x > LIMIT_X) { if (b.vel.x > 0) b.vel.x = -b.vel.x * RESTITUTION_CUSHION; b.pos.x = LIMIT_X; }
           if (b.pos.x < -LIMIT_X) { if (b.vel.x < 0) b.vel.x = -b.vel.x * RESTITUTION_CUSHION; b.pos.x = -LIMIT_X; }
           if (b.pos.z > LIMIT_Z) { if (b.vel.z > 0) b.vel.z = -b.vel.z * RESTITUTION_CUSHION; b.pos.z = LIMIT_Z; }

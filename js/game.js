@@ -61,7 +61,7 @@
   scene.add(key);
 
   /* ================= 氛围：球桌顶灯 + 桁架聚光灯 + 看台小动物观众 ================= */
-  const ARENA = { lights: [], bases: [], spots: [], rigs: [], phones: [], pulses: [], rimMat: null };
+  const ARENA = { lights: [], bases: [], spots: [], rigs: [], phones: [], pulses: [], beams: [], rimMat: null };
   const RAIL_Y = 3.02;                        // 桁架横梁高度（顶灯吊杆挂点）
   let crowdExciteV = 0;                       // 进球欢呼激励值（随时间衰减）
 
@@ -182,8 +182,10 @@
           mesh.frustumCulled = false;
           return mesh;
         };
-        head.add(mkBeam(0.30, 0.30));        // 外层柔光
-        head.add(mkBeam(0.13, 0.50));        // 内层亮芯
+        for (const b of [mkBeam(0.30, 0.30), mkBeam(0.13, 0.50)]) {
+          head.add(b);
+          ARENA.beams.push(b);
+        }
       }
       rigRoot.add(pivot);
       ARENA.spots.push({ pivot, tgt: s.target, dir, len: lenToTgt, base: pivot.position.clone(), ph: Math.random() * Math.PI * 2 });
@@ -550,37 +552,96 @@
     const brassMat = new THREE.MeshStandardMaterial({ color: 0xb08b4f, roughness: 0.32, metalness: 0.85 });
 
     // 台呢（顶面正好在 y=0）
-    const cloth = mkBox(TABLE_W + 0.14, 0.02, TABLE_H + 0.14, 0, -0.01, 0, clothMat);
-    cloth.castShadow = false;
+    // 台呢：整块厚板真实挖出 6 个袋口孔（洞下是导袋筒与球网）
+    // 四角做圆角（与外框圆角同心内缩），避免直角从外框圆角处漏出
+    const clothShape = new THREE.Shape();
+    buildRoundedRect(clothShape, HALF_W + 0.115, HALF_H + 0.115, 0.13);
+    for (const p of POCKETS) {
+      const hp = new THREE.Path();
+      hp.absarc(p.x, -p.z, p.r + 0.010, 0, Math.PI * 2, true);
+      clothShape.holes.push(hp);
+    }
+    const clothGeo = new THREE.ExtrudeGeometry(clothShape, { depth: 0.02, bevelEnabled: false, curveSegments: 12 });
+    clothGeo.rotateX(-Math.PI / 2);
+    const cloth = new THREE.Mesh(clothGeo, clothMat);
+    cloth.position.y = -0.02;          // 顶面正好在 y=0
+    cloth.receiveShadow = true;
+    table.add(cloth);
 
-    // 库边：绿呢垫条（立面与压条同色系），6 段留出袋口
-    const CUSH_D = 0.05, CUSH_H = 0.042;
-    const cornerGap = 0.105, sideGap = 0.078;
-    const lx0 = -HALF_W + cornerGap, lx1 = -sideGap, lx2 = sideGap, lx3 = HALF_W - cornerGap;
-    // 压条用略深的同系绿色，与台面浑然一体
-    const capMat = new THREE.MeshStandardMaterial({ color: 0x09633a, roughness: 0.92 });
-    function cushionSeg(len, cx, cz, alongX) {
-      const g = alongX
-        ? new THREE.BoxGeometry(len, CUSH_H, CUSH_D)
-        : new THREE.BoxGeometry(CUSH_D, CUSH_H, len);
-      const m = new THREE.Mesh(g, cushMat);
-      m.position.set(cx, CUSH_H / 2, cz);
+    // 库边：绿呢垫条（与台呢同色），6 段单层结构（无压条叠层）
+    // 两端沿洞口同心圆弧收头（弧半径 = 洞口半径 + 间隙）：俯视下洞口开孔范围内无库边投影
+    // 顶高 0.054 与外框面板顶面齐平；背面直接接到外框内缘（无缝）
+    const CUSH_D = 0.05, CUSH_H = 0.054;
+    const C_BITE = POCKETS[0].r + 0.016;      // 角袋侧贴合弧半径（洞口 0.076 + 6mm 间隙）
+    const S_BITE = POCKETS[4].r + 0.016;      // 中袋侧贴合弧半径（洞口 0.068 + 6mm 间隙）
+
+    /**
+     * 生成一段贴洞库边截面（局部坐标：u 沿库边、v 法向；鼻线 v=noseC、背线 v=backC）
+     * endA/endB：两端洞口 { u, v, R }（洞心局部坐标 + 贴合弧半径）
+     * map(u, v) → [shapeX, shapeY]（shape.y = -world.z）
+     */
+    function railGeo(noseC, backC, endA, endB, map) {
+      const pt = (u, v) => { const p = map(u, v); return { x: p[0], y: p[1] }; };
+      const dir = Math.sign(endB.u - endA.u) || 1;
+      // 求洞口贴合弧与鼻线002f背线的交点：交点必须落在段体一侧（A 端朝 +u、B 端朝 -u）
+      const cutP = (p, lineC, sign) => {
+        const dv = lineC - p.v;
+        const du = sign * Math.sqrt(Math.max(0.0004, p.R * p.R - dv * dv));
+        return { u: p.u + du, v: lineC };
+      };
+      const nA = cutP(endA, noseC, dir), nB = cutP(endB, noseC, -dir);
+      const bB = cutP(endB, backC, -dir), bA = cutP(endA, backC, dir);
+      const A0 = pt(nA.u, noseC), B0 = pt(nB.u, noseC);
+      const B1 = pt(bB.u, backC), A1 = pt(bA.u, backC);
+      const cA = pt(endA.u, endA.v), cB = pt(endB.u, endB.v);
+      const s = new THREE.Shape();
+      s.moveTo(A0.x, A0.y);
+      s.lineTo(B0.x, B0.y);                                             // 鼻端（球接触面）
+      {
+        const c = cB, a1 = Math.atan2(B0.y - c.y, B0.x - c.x);
+        let d = Math.atan2(B1.y - c.y, B1.x - c.x) - a1;
+        while (d <= -Math.PI) d += 2 * Math.PI;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        s.absarc(c.x, c.y, endB.R, a1, a1 + d, d < 0);                  // B 端沿洞口圆弧
+      }
+      s.lineTo(A1.x, A1.y);                                             // 背面
+      {
+        const c = cA, a1 = Math.atan2(A1.y - c.y, A1.x - c.x);
+        let d = Math.atan2(A0.y - c.y, A0.x - c.x) - a1;
+        while (d <= -Math.PI) d += 2 * Math.PI;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        s.absarc(cA.x, cA.y, endA.R, a1, a1 + d, d < 0);                // A 端沿洞口圆弧
+      }
+      const g = new THREE.ExtrudeGeometry(s, { depth: CUSH_H, bevelEnabled: false, curveSegments: 12 });
+      g.rotateX(-Math.PI / 2);                                          // shape.y = -world.z
+      return g;
+    }
+
+    // 6 段库边：局部坐标系（u 沿库边、v 法向）与两端洞口
+    // 背线取外框内缘线（HALF + CUSH_D + 0.0035），库边背面与外框内缘无缝衔接
+    const segs = [];
+    for (const sz of [1, -1]) {
+      // 长库边（左右两半）：u = world x，v = world z
+      // 映射固定为 shape = [u, -v]（rotateX 后 world.z = -shape.y），正负侧通用
+      const mapL = (u, v) => [u, -v];
+      segs.push({ sz, noseC: sz * HALF_H, backC: sz * (HALF_H + CUSH_D + 0.0035), map: mapL,
+        A: { u: -Math.abs(POCKETS[0].x), v: sz * Math.abs(POCKETS[0].z), R: C_BITE },
+        B: { u: -Math.abs(POCKETS[4].x), v: sz * Math.abs(POCKETS[4].z), R: S_BITE } });
+      segs.push({ sz, noseC: sz * HALF_H, backC: sz * (HALF_H + CUSH_D + 0.0035), map: mapL,
+        A: { u: Math.abs(POCKETS[4].x), v: sz * Math.abs(POCKETS[4].z), R: S_BITE },
+        B: { u: Math.abs(POCKETS[0].x), v: sz * Math.abs(POCKETS[0].z), R: C_BITE } });
+    }
+    for (const sx of [1, -1]) {
+      // 短库边：u = world z，v = world x（两端都是角袋）；映射固定为 shape = [v, -u]
+      const mapS = (u, v) => [v, -u];
+      segs.push({ sz: sx, noseC: sx * HALF_W, backC: sx * (HALF_W + CUSH_D + 0.0035), map: mapS,
+        A: { u: -Math.abs(POCKETS[0].z), v: sx * Math.abs(POCKETS[0].x), R: C_BITE },
+        B: { u: Math.abs(POCKETS[0].z), v: sx * Math.abs(POCKETS[0].x), R: C_BITE } });
+    }
+    for (const seg of segs) {
+      const m = new THREE.Mesh(railGeo(seg.noseC, seg.backC, seg.A, seg.B, seg.map), cushMat);
       m.castShadow = m.receiveShadow = true;
       table.add(m);
-      // 压条：比立面略宽，盖住呢面接缝
-      const t = alongX
-        ? new THREE.BoxGeometry(len, 0.013, CUSH_D + 0.008)
-        : new THREE.BoxGeometry(CUSH_D + 0.008, 0.013, len);
-      const cap = new THREE.Mesh(t, capMat);
-      cap.position.set(cx, CUSH_H + 0.0055, cz);
-      cap.castShadow = cap.receiveShadow = true;
-      table.add(cap);
-    }
-    for (const s of [-1, 1]) {
-      const cz = s * (HALF_H + CUSH_D / 2);
-      cushionSeg(lx1 - lx0, (lx0 + lx1) / 2, cz, true);
-      cushionSeg(lx3 - lx2, (lx2 + lx3) / 2, cz, true);
-      cushionSeg(TABLE_H - 2 * cornerGap, s * (HALF_W + CUSH_D / 2), 0, false);
     }
 
     // 台面外圈：一整块带圆角的环形面板（圆角矩形挖孔后挤出成型）
@@ -600,18 +661,47 @@
     const HZ_OUT = HALF_H + CUSH_D + RAIL_T - 0.01;
     const frameShape = new THREE.Shape();
     buildRoundedRect(frameShape, HX_OUT, HZ_OUT, 0.15);
+    // 内缘：沿圆角矩形行进，在每个袋口处绕出让位圆弧（红色外框为洞口让位）
     const holePath = new THREE.Path();
-    buildRoundedRect(holePath, HALF_W + CUSH_D + 0.0035, HALF_H + CUSH_D + 0.0035, 0.088);
+    const inHx = HALF_W + CUSH_D + 0.0035, inHz = HALF_H + CUSH_D + 0.0035, inRc = 0.088;
+    const cBite = C_BITE + 0.004;              // 角袋让位半径：比库边贴合弧大 4mm，露出一圈红边
+    const sBite = S_BITE + 0.004;              // 中袋让位半径
+    const cPx = Math.abs(POCKETS[0].x), cPz = Math.abs(POCKETS[0].z);
+    const sPz = Math.abs(POCKETS[4].z);
+    const ang = (cx, cz, px, pz) => Math.atan2(pz - cz, px - cx);
+    // 缺口与内缘直边的交点半宽/半高（运行时计算，随袋口偏移自适应）
+    const cCutX = Math.sqrt(cBite * cBite - (inHz - cPz) ** 2);   // 角袋缺口在横边上的半宽
+    const cCutY = Math.sqrt(cBite * cBite - (inHx - cPx) ** 2);   // 角袋缺口在竖边上的半高
+    const sCut = Math.sqrt(sBite * sBite - (inHz - sPz) ** 2);    // 中袋缺口在横边上的半宽
+    holePath.moveTo(-inHx + inRc, -inHz);
+    // 底边 → 中袋缺口 → 右下角袋缺口
+    holePath.lineTo(-sCut, -inHz);
+    holePath.absarc(0, -sPz, sBite, ang(0, -sPz, -sCut, -inHz), ang(0, -sPz, sCut, -inHz), false);
+    holePath.lineTo(cPx - cCutX, -inHz);
+    holePath.absarc(cPx, -cPz, cBite, ang(cPx, -cPz, cPx - cCutX, -inHz), ang(cPx, -cPz, inHx, -cPz + cCutY), false);
+    // 右边 → 右上角袋缺口
+    holePath.lineTo(inHx, cPz - cCutY);
+    holePath.absarc(cPx, cPz, cBite, ang(cPx, cPz, inHx, cPz - cCutY), ang(cPx, cPz, cPx - cCutX, inHz), false);
+    // 顶边 → 中袋缺口 → 顶边
+    holePath.lineTo(sCut, inHz);
+    holePath.absarc(0, sPz, sBite, ang(0, sPz, sCut, inHz), ang(0, sPz, -sCut, inHz), false);
+    holePath.lineTo(-(cPx - cCutX), inHz);
+    // 左上角袋缺口 → 左边
+    holePath.absarc(-cPx, cPz, cBite, ang(-cPx, cPz, -(cPx - cCutX), inHz), ang(-cPx, cPz, -inHx, cPz - cCutY), false);
+    holePath.lineTo(-inHx, -(cPz - cCutY));
+    // 左下角袋缺口 → 闭合回底边起点
+    holePath.absarc(-cPx, -cPz, cBite, ang(-cPx, -cPz, -inHx, -(cPz - cCutY)), ang(-cPx, -cPz, -(cPx - cCutX), -inHz), false);
     frameShape.holes.push(holePath);
-    const PANEL_DEPTH = 0.016;
+    // 外框加厚为实心框体：顶面 0.054 与库边齐平，一直延伸到台呢以下（-0.03），
+    // 封住框体与绿色呢面之间的空隙，袋口缺口侧壁也随之封闭
+    const PANEL_DEPTH = 0.084;
     const panelGeo = new THREE.ExtrudeGeometry(frameShape, {
       depth: PANEL_DEPTH, bevelEnabled: false,
       curveSegments: 14,
     });
     const panel = new THREE.Mesh(panelGeo, woodMat);
     panel.rotation.x = -Math.PI / 2;                   // 形状 XY 落到 XZ 平面，厚度向上
-    // 面板顶面与库边压条顶面齐平（无高度差就不会产生间隔视觉差）
-    panel.position.y = 0.038;
+    panel.position.y = -0.03;                          // 顶面 = -0.03 + 0.084 = 0.054
     panel.receiveShadow = true;
     table.add(panel);
 
@@ -660,12 +750,49 @@
     scene.add(floor);
 
     // 袋口：只保留洞口本身（不加任何遮罩物）
-    const holeMat = new THREE.MeshBasicMaterial({ color: 0x04050a });
+    // 袋口：导袋筒 + 菱形网眼球网（洞口真实通透，无口环遮罩）
+    // 筒壁双面渲染：斜角度观察时近侧筒壁也封住视线，袋内呈封闭暗井而非镂空
+    const throatMat = new THREE.MeshStandardMaterial({ color: 0x0a0d13, roughness: 0.95, side: THREE.DoubleSide });
+    const pitMat = new THREE.MeshBasicMaterial({ color: 0x04050a });
+    const netMat = new THREE.LineBasicMaterial({ color: 0xb7a67f, transparent: true, opacity: 0.5 });
     for (const p of POCKETS) {
-      const hole = new THREE.Mesh(new THREE.CircleGeometry(p.r + 0.03, 32), holeMat);
-      hole.rotation.x = -Math.PI / 2;
-      hole.position.set(p.x, 0.0022, p.z);
-      table.add(hole);
+      const g = new THREE.Group();
+      // 导袋筒内壁：顶沿压在台呢之下、口径与洞口齐平（避免筒沿露出呢面成虚线圈）
+      const throat = new THREE.Mesh(
+        new THREE.CylinderGeometry(p.r + 0.012, p.r * 0.62, 0.1, 24, 1, true), throatMat);
+      throat.position.set(p.x, -0.071, p.z);
+      // 筒底封口：与筒底同径的圆片贴在筒底，彻底封住袋底
+      const pit = new THREE.Mesh(new THREE.CircleGeometry(p.r * 0.65, 24), pitMat);
+      pit.rotation.x = -Math.PI / 2;
+      pit.position.set(p.x, -0.118, p.z);
+      // 球网：斜向菱形网眼 + 逐层收口环
+      const R0 = p.r + 0.012, R1 = p.r * 0.52, Y0 = -0.012, Y1 = -0.088;
+      const LEVELS = 4, STRANDS = 10;
+      const ringR = i => R0 + (R1 - R0) * (i / LEVELS);
+      const ringY = i => Y0 + (Y1 - Y0) * (i / LEVELS);
+      const pts = [];
+      for (let si = 0; si < STRANDS; si++) {
+        const a0 = (si / STRANDS) * Math.PI * 2;
+        for (let i = 0; i < LEVELS; i++) {
+          const dA = (i % 2 === 0 ? -1 : 1) * Math.PI / STRANDS;
+          pts.push(
+            p.x + Math.cos(a0 + dA) * ringR(i), ringY(i), p.z + Math.sin(a0 + dA) * ringR(i),
+            p.x + Math.cos(a0 - dA) * ringR(i + 1), ringY(i + 1), p.z + Math.sin(a0 - dA) * ringR(i + 1));
+        }
+      }
+      for (let i = 0; i <= LEVELS; i++) {
+        for (let k = 0; k < 24; k++) {
+          const a1 = (k / 24) * Math.PI * 2, a2 = ((k + 1) / 24) * Math.PI * 2;
+          pts.push(
+            p.x + Math.cos(a1) * ringR(i), ringY(i), p.z + Math.sin(a1) * ringR(i),
+            p.x + Math.cos(a2) * ringR(i), ringY(i), p.z + Math.sin(a2) * ringR(i));
+        }
+      }
+      const netGeo = new THREE.BufferGeometry();
+      netGeo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      const net = new THREE.LineSegments(netGeo, netMat);
+      g.add(throat, pit, net);
+      table.add(g);
     }
 
     // 置球点与开球线标记
@@ -1450,6 +1577,7 @@ case 'ArrowLeft':
     // 俯视时移开头顶灯罩与桁架灯具，台面一览无遗（光源本身无形，保留照明）
     if (ARENA.lamp) ARENA.lamp.visible = !on;
     if (ARENA.rig) ARENA.rig.visible = !on;
+    for (const b of ARENA.beams) b.visible = !on;   // 光锥壳体一并移开，俯视台面不被色板遮挡
     $('btn-top').style.background = on ? 'rgba(40,220,140,.35)' : '';
   }
 
