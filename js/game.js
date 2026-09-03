@@ -3,7 +3,7 @@
  * 场景与台球桌搭建 / 球体生成 / 瞄准出杆交互 / 摄像机 /
  * 规则结算与 HUD / 渲染主循环
  * ============================================================ */
-(function () {
+(async function () {
   'use strict';
 
   const { BALL_R, TABLE_W, TABLE_H, POCKETS, LIMIT_X, LIMIT_Z, Ball, World, applyStrike } = PoolPhys;
@@ -59,6 +59,15 @@
   key.shadow.bias = -0.0004;
   key.shadow.camera.updateProjectionMatrix();
   scene.add(key);
+
+  /* ================= 开机分阶段加载 =================
+   * loader.js 暴露 window.__BOOT：stage() 上报阶段文案与进度，
+   * frame() 在每段重活之间让浏览器绘制一帧（加载层动画肉眼可见地推进）。
+   * 若加载层缺失（如离线场景）则退化为同步直跑，不影响正常游戏。
+   * ==================================================== */
+  const BOOT = window.__BOOT || { ready: true, stage() {}, frame: () => Promise.resolve(), done() {} };
+  BOOT.stage('初始化渲染引擎…', 8);
+  await BOOT.frame();
 
   /* ================= 氛围：球桌顶灯 + 桁架聚光灯 + 看台小动物观众 ================= */
   const ARENA = { lights: [], bases: [], spots: [], rigs: [], phones: [], pulses: [], beams: [], rimMat: null };
@@ -350,6 +359,8 @@
       }
     }
   }
+  BOOT.stage('搭建赛场看台与灯光桁架…', 16);
+  await BOOT.frame();
   buildArena();
 
   /** 球桌正上方无影灯组：经典绿色长罩 + 柔光面板 + 主照明光源，吊杆挂于桁架中横梁 */
@@ -442,6 +453,8 @@
       addPulse(mid, 0.24);
     }
   }
+  BOOT.stage('悬挂球桌上空灯组…', 27);
+  await BOOT.frame();
   buildTableLamp();
 
   /** 每帧氛围驱动：灯光呼吸 / 光锥微摆 / 小动物观众晃动欢呼（耳抖尾摇） */
@@ -526,8 +539,10 @@
   /** 进球时的观众激励：短暂欢腾弹跳 */
   function crowdExcite(v) { crowdExciteV = Math.min(1.6, crowdExciteV + v); }
 
-  /* ================= 特效系统接入 ================= */
-  FX.init(scene);
+/* ================= 特效系统接入 ================= */
+  BOOT.stage('接入粒子特效…', 33);
+  await BOOT.frame();
+  FX.init(scene);
 
   /* ================= 台球桌 ================= */
   function mkBox(w, h, d, x, y, z, mat, parent) {
@@ -539,7 +554,9 @@
     return m;
   }
 
-  const table = new THREE.Group();
+  BOOT.stage('铺设台呢 · 挖出袋口…', 38);
+  await BOOT.frame();
+  const table = new THREE.Group();
   scene.add(table);
   {
     const clothMat = new THREE.MeshStandardMaterial({ color: 0x0b7a42, roughness: 0.94, metalness: 0 });
@@ -806,6 +823,8 @@
 
     // （真实球台围板上的钻石位标记在游戏比例下易被误认为杂点，已移除）
   }
+  BOOT.stage('球桌完成 · 生成球体与物理世界…', 52);
+  await BOOT.frame();
 
   /* ================= 球体生成 ================= */
   const BALL_COLORS = {
@@ -2292,8 +2311,9 @@ NET.on('error', msg => {
   }
 
   /* ================= 按钮 / 启动 ================= */
-  function startGame(mode) {
-    gameMode = mode;
+function startGame(mode) {
+    if (!BOOT.ready) return;   // 资源未就绪时忽略点击（加载层尚未放行）
+    gameMode = mode;
     netWaiting = false; // 进入单机/本地模式时解除联机等待阻塞
     SFX.init();
     if (mode === 'versus') {
@@ -2318,7 +2338,8 @@ const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').match
   }
 $('btn-arcade').addEventListener('click', () => startGame('arcade'));
 $('btn-online').addEventListener('click', () => {
-    SFX.init();
+    if (!BOOT.ready) return;   // 资源未就绪时忽略点击（加载层尚未放行）
+    SFX.init();
     gameMode = 'versus-net';
     netWaiting = true;
     document.body.classList.add('mode-versus');
@@ -2382,16 +2403,25 @@ $('btn-restart').addEventListener('click', () => requestRestart());
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  /* 开机 */
+  /* 开机：分阶段执行，loader 实时显示进度；全部就绪后才放行主菜单 */
+  BOOT.stage('装备球杆与瞄准引导线…', 60);
+  await BOOT.frame();
   setupNet();
   buildCue();
   buildGuide();
+  BOOT.stage('摆放球堆 · 白球就位…', 70);
+  await BOOT.frame();
   restart();
+  BOOT.stage('启动渲染循环…', 80);
+  await BOOT.frame();
   animate();
   if (window.__DEBUG) window.__G = { scene, camera };   // 调试只读探针：场景图
-  // ?autostart 调试：跳过开始界面直接进入单人街机
+  BOOT.stage('全部就绪', 92);
+  await BOOT.frame();
+  BOOT.done();                                        // 加载层淡出，主菜单可点
+  // ?autostart 调试：跳过开始界面直接进入单人街机（等加载层淡出后再进入）
   if (window.__DEBUG && new URLSearchParams(location.search).has('autostart')) {
-    setTimeout(() => startGame('arcade'), 400);
+    setTimeout(() => startGame('arcade'), 800);
   }
 })();
 

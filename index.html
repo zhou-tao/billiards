@@ -11,6 +11,38 @@
 </head>
 
 <body>
+  <!-- 全屏加载层：资源就绪前盖住整页（含主菜单），避免移动端长解析期“点了没反应” -->
+  <div id="loader" role="status" aria-live="polite">
+    <div class="ld-bg" aria-hidden="true">
+      <i class="ld-orb o1"></i><i class="ld-orb o2"></i><i class="ld-orb o3"></i>
+    </div>
+
+    <div class="ld-inner">
+      <h1 class="ld-title">🎱 动感台球</h1>
+
+      <!-- 开球动画：白球撞散 15 球球堆（循环） -->
+      <div class="ld-stage" aria-hidden="true">
+        <div class="ld-cue" id="ld-cue"></div>
+        <div class="ld-cueball" id="ld-cueball"></div>
+        <div class="ld-flash" id="ld-flash"></div>
+        <div class="ld-rack" id="ld-rack"></div>
+      </div>
+
+      <!-- 球桌轨道进度条：白球随进度滑行，满 100% 落入袋口 -->
+      <div class="ld-bar-wrap">
+        <div class="ld-bar" id="ld-bar">
+          <div class="ld-fill" id="ld-fill"></div>
+          <div class="ld-marker" id="ld-marker"></div>
+          <div class="ld-pocket" id="ld-pocket"></div>
+        </div>
+        <div class="ld-meta">
+          <span class="ld-stage-text" id="ld-stage-text">正在加载引擎…</span>
+          <span class="ld-pct" id="ld-pct">0%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="app">
     <canvas id="scene"></canvas>
 
@@ -195,15 +227,18 @@
     });
     window.__DEBUG = /[?&]debug\b/.test(location.search);
   </script>
-  <script src="lib/three.min.js"></script>
-  <script src="js/audio.js"></script>
-  <script src="js/effects.js"></script>
-  <script src="js/physics.js"></script>
-  <script src="js/rules.js"></script>
-  <script src="js/protocol.js"></script>
-  <script src="js/config.js"></script>
-  <script src="js/net.js"></script>
-  <script src="js/game.js"></script>
+  <script src="js/loader.js"></script>
+  <noscript><style>#loader{display:none}</style></noscript>
+  <!-- 游戏脚本全部 defer：先绘出加载层并播放动画，再解析执行重型代码 -->
+  <script defer src="lib/three.min.js"></script>
+  <script defer src="js/audio.js"></script>
+  <script defer src="js/effects.js"></script>
+  <script defer src="js/physics.js"></script>
+  <script defer src="js/rules.js"></script>
+  <script defer src="js/protocol.js"></script>
+  <script defer src="js/config.js"></script>
+  <script defer src="js/net.js"></script>
+  <script defer src="js/game.js"></script>
 </body>
 
 </html>

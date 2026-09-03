@@ -955,3 +955,463 @@ body.mode-versus #potted-tray {
     bottom: 14px;
   }
 }
+/* ============================================================
+ * 全屏加载层：台球开球动画 + 球桌轨道进度条
+ * 覆盖整页（含主菜单），资源就绪前拦截所有点击
+ * ============================================================ */
+#loader {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(ellipse at 50% 30%, #202a58 0%, #131a3e 58%, #070b1c 100%);
+  transition: opacity .45s ease;
+}
+
+#loader.done {
+  opacity: 0;
+}
+
+/* 背景霓虹光斑 */
+.ld-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ld-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(46px);
+  opacity: .42;
+  will-change: transform;
+}
+
+.ld-orb.o1 {
+  width: 36vmax;
+  height: 36vmax;
+  left: -9vmax;
+  top: -11vmax;
+  background: rgba(89, 240, 164, .34);
+  animation: ld-drift1 16s ease-in-out infinite alternate;
+}
+
+.ld-orb.o2 {
+  width: 30vmax;
+  height: 30vmax;
+  right: -8vmax;
+  bottom: -13vmax;
+  background: rgba(110, 200, 255, .30);
+  animation: ld-drift2 21s ease-in-out infinite alternate;
+}
+
+.ld-orb.o3 {
+  width: 22vmax;
+  height: 22vmax;
+  left: 34%;
+  top: 52%;
+  background: rgba(255, 201, 77, .22);
+  animation: ld-drift3 26s ease-in-out infinite alternate;
+}
+
+@keyframes ld-drift1 {
+  to {
+    transform: translate(9vmax, 7vmax) scale(1.12);
+  }
+}
+
+@keyframes ld-drift2 {
+  to {
+    transform: translate(-10vmax, -6vmax) scale(1.16);
+  }
+}
+
+@keyframes ld-drift3 {
+  to {
+    transform: translate(6vmax, -9vmax) scale(.88);
+  }
+}
+
+.ld-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+  max-width: 92vw;
+  text-align: center;
+}
+
+.ld-title {
+  font-size: clamp(28px, 6.5vw, 42px);
+  font-weight: 900;
+  letter-spacing: 7px;
+  color: #f7faff;
+  text-shadow: 0 2px 12px rgba(2, 5, 15, .6), 0 0 26px rgba(110, 200, 255, .45), 0 0 64px rgba(89, 240, 164, .30);
+  animation: ld-title-pulse 2.6s ease-in-out infinite;
+}
+
+@keyframes ld-title-pulse {
+  0%,
+  100% {
+    text-shadow: 0 2px 12px rgba(2, 5, 15, .6), 0 0 22px rgba(110, 200, 255, .38), 0 0 56px rgba(89, 240, 164, .24);
+  }
+
+  50% {
+    text-shadow: 0 2px 12px rgba(2, 5, 15, .6), 0 0 34px rgba(110, 200, 255, .6), 0 0 84px rgba(89, 240, 164, .42);
+  }
+}
+
+/* ---------- 开球动画舞台 ---------- */
+.ld-stage {
+  position: relative;
+  width: 260px;
+  height: 118px;
+}
+
+/* 球堆容器：原点 = 球堆尖端（撞击点） */
+.ld-rack {
+  position: absolute;
+  left: 88px;
+  top: 55px;
+  width: 0;
+  height: 0;
+}
+
+.ld-ball {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 26%, rgba(255, 255, 255, .9) 0 14%, var(--c) 46%, rgba(6, 9, 18, .9) 100%);
+  box-shadow: inset -3px -4px 7px rgba(0, 0, 0, .42), 0 5px 10px rgba(0, 0, 0, .5);
+  animation: ld-ball 4.6s cubic-bezier(.16, .78, .3, 1) infinite;
+}
+
+/* 花色球：白底 + 彩色腰带 */
+.ld-ball.stripe {
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, .85) 0 12%, transparent 42%),
+    linear-gradient(180deg, #f2f5fb 0 33%, var(--c) 33% 67%, #f2f5fb 67% 100%);
+}
+
+/* 黑八：白圈 + 数字 8 */
+.ld-ball.eight {
+  background: radial-gradient(circle at 50% 50%, #f4f7fc 0 30%, #181c26 31% 100%);
+  color: #10131c;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 22px;
+  text-align: center;
+}
+
+/* 白球：直行撞散球堆 */
+.ld-cueball {
+  position: absolute;
+  left: 0;
+  top: 55px;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #ffffff, #e4ebf6 55%, #93a4c2);
+  box-shadow: inset -3px -4px 7px rgba(60, 78, 110, .5), 0 5px 12px rgba(0, 0, 0, .55), 0 0 14px rgba(255, 255, 255, .35);
+  animation: ld-cueball 4.6s cubic-bezier(.2, .6, .3, 1) infinite;
+}
+
+/* 球杆：跟随白球前冲，触球后轻微回抽 */
+.ld-cue {
+  position: absolute;
+  left: 0;
+  top: 70px;
+  width: 122px;
+  height: 5px;
+  margin-left: -62px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #d6ad62 0%, #9a6b30 55%, #5f3d18 100%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .5);
+  transform-origin: 0 50%;
+  animation: ld-cue 4.6s cubic-bezier(.2, .6, .3, 1) infinite;
+}
+
+.ld-cue::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: -1.5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2f6fe0;
+}
+
+/* 撞击冲击波 */
+.ld-flash {
+  position: absolute;
+  left: 88px;
+  top: 55px;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .9);
+  box-shadow: 0 0 20px rgba(110, 200, 255, .9), inset 0 0 12px rgba(255, 255, 255, .5);
+  opacity: 0;
+  animation: ld-flash 4.6s ease-out infinite;
+}
+
+@keyframes ld-ball {
+  0%,
+  4.5% {
+    transform: translate(var(--hx), var(--hy)) scale(.35);
+    opacity: 0;
+  }
+
+  6.5% {
+    transform: translate(var(--hx), var(--hy)) scale(1);
+    opacity: 1;
+  }
+
+  13.4% {
+    transform: translate(var(--hx), var(--hy)) scale(1);
+  }
+
+  48% {
+    transform: translate(var(--ex), var(--ey)) scale(1);
+    opacity: .95;
+  }
+
+  72% {
+    transform: translate(var(--ex), var(--ey)) scale(.94);
+    opacity: .88;
+  }
+
+  86%,
+  100% {
+    transform: translate(var(--ex), var(--ey)) scale(.3);
+    opacity: 0;
+  }
+}
+
+@keyframes ld-cueball {
+  0% {
+    transform: translateX(-72px);
+    opacity: 0;
+  }
+
+  4% {
+    opacity: 1;
+  }
+
+  13.2% {
+    transform: translateX(66px);
+  }
+
+  17% {
+    transform: translateX(70px);
+    opacity: .9;
+  }
+
+  31%,
+  100% {
+    transform: translateX(160px);
+    opacity: 0;
+  }
+}
+
+@keyframes ld-cue {
+  0% {
+    transform: translateX(-96px);
+    opacity: 0;
+  }
+
+  4% {
+    opacity: 1;
+  }
+
+  13.2% {
+    transform: translateX(56px);
+  }
+
+  18% {
+    transform: translateX(34px);
+    opacity: .85;
+  }
+
+  33%,
+  100% {
+    transform: translateX(-110px);
+    opacity: 0;
+  }
+}
+
+@keyframes ld-flash {
+  0%,
+  13.3% {
+    transform: scale(0);
+    opacity: 0;
+  }
+
+  13.7% {
+    transform: scale(.55);
+    opacity: 1;
+  }
+
+  26% {
+    transform: scale(2.7);
+    opacity: 0;
+  }
+
+  100% {
+    transform: scale(2.7);
+    opacity: 0;
+  }
+}
+
+/* ---------- 球桌轨道进度条 ---------- */
+.ld-bar-wrap {
+  width: min(300px, 68vw);
+  display: grid;
+  gap: 9px;
+}
+
+.ld-bar {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #0c1230, #1e2852);
+  border: 1px solid rgba(255, 255, 255, .16);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, .65), 0 0 0 1px rgba(255, 255, 255, .04);
+}
+
+.ld-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1dbb72, #59f0a4 42%, #8fe8ff);
+  box-shadow: 0 0 14px rgba(89, 240, 164, .6), 0 0 36px rgba(89, 240, 164, .3);
+}
+
+/* 随进度滑行的白球 */
+.ld-marker {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #ffffff, #e6ecf6 55%, #93a4c2);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .55), 0 0 11px rgba(255, 255, 255, .5);
+  z-index: 2;
+}
+
+/* 满 100%：白球缩入袋口 */
+.ld-marker.in {
+  transform: scale(.14);
+  opacity: .45;
+  transition: transform .3s cubic-bezier(.55, .06, .3, 1), opacity .3s ease;
+}
+
+/* 终端袋口 */
+.ld-pocket {
+  position: absolute;
+  right: -17px;
+  top: 50%;
+  width: 30px;
+  height: 30px;
+  margin-top: -15px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #39497a, #04060f 72%);
+  border: 2px solid rgba(110, 200, 255, .55);
+  box-shadow: inset 0 3px 8px rgba(0, 0, 0, .85), 0 0 12px rgba(110, 200, 255, .4);
+  z-index: 1;
+}
+
+#loader.done .ld-pocket {
+  animation: ld-pocket-flash .5s ease;
+}
+
+@keyframes ld-pocket-flash {
+  50% {
+    box-shadow: inset 0 3px 8px rgba(0, 0, 0, .85), 0 0 26px rgba(110, 200, 255, 1), 0 0 52px rgba(89, 240, 164, .6);
+    transform: scale(1.12);
+  }
+}
+
+.ld-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.ld-stage-text {
+  color: var(--mint);
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-shadow: 0 0 10px rgba(89, 240, 164, .55);
+}
+
+.ld-pct {
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: var(--amber);
+  text-shadow: var(--glow-amber);
+}
+
+/* ---------- 手机适配 ---------- */
+@media (max-width: 520px) {
+  .ld-inner {
+    gap: 22px;
+  }
+
+  .ld-stage {
+    transform: scale(.78);
+    margin-bottom: -18px;
+  }
+
+  .ld-bar-wrap {
+    width: 64vw;
+  }
+
+  .ld-meta {
+    font-size: 12px;
+  }
+}
+
+/* 减少动态效果偏好：静态展示球堆，不再循环开球 */
+@media (prefers-reduced-motion: reduce) {
+  .ld-orb,
+  .ld-title,
+  .ld-ball,
+  .ld-cueball,
+  .ld-cue,
+  .ld-flash {
+    animation: none;
+  }
+
+  .ld-ball {
+    transform: translate(var(--hx), var(--hy)) scale(1);
+    opacity: 1;
+  }
+
+  .ld-cueball {
+    transform: translateX(60px);
+    opacity: 1;
+  }
+
+  .ld-cue {
+    transform: translateX(48px);
+    opacity: 1;
+  }
+}
